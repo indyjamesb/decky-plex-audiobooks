@@ -27,7 +27,7 @@ import uuid
 from datetime import datetime, timezone
 
 PRODUCT_NAME = "Plex Audiobooks for Steam Deck"
-PRODUCT_VERSION = "0.5.1"
+PRODUCT_VERSION = "0.5.2"
 CONNECT_TIMEOUT_S = 4.0
 CANNOT_REACH = "Can't reach your Plex server."
 PLEX_TV = "https://plex.tv"

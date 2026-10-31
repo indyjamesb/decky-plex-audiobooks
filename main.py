@@ -19,15 +19,19 @@ import decky
 from deck_hid import DeckHidWatcher, migrate_shortcut, normalize_buttons
 from game_audio import GameMixer, clamp_percent, pactl_run, truthy
 from player import (
+    AUDIO_NOT_READY,
     FFPLAY_MISSING,
     Player,
+    connect_user_audio,
     PlayerError,
     build_child_env,
     ffplay_missing_message,
     find_ffplay,
     find_pulse_socket,
+    playback_failure_message,
     reap_orphaned_ffplay,
     set_process_volume,
+    wait_for_audio,
 )
 from plex import PlexClient, PlexError, normalize_server_url
 from plex_auth import (
@@ -57,7 +61,7 @@ from progress import (
     track_is_complete,
 )
 
-VERSION = "0.5.1"
+VERSION = "0.5.2"
 REPORT_INTERVAL_S = 10
 _PY_LOG_LEVELS = {
     "error": logging.ERROR,
@@ -155,7 +159,8 @@ class Plugin:
         self._apply_log_level()
         log_dir = decky.DECKY_PLUGIN_LOG_DIR
         os.makedirs(log_dir, exist_ok=True)
-        env = build_child_env(dict(os.environ), find_pulse_socket())
+        self._audio_env = build_child_env(dict(os.environ), find_pulse_socket())
+        env = self._audio_env
         ffplay = find_ffplay()
         if not ffplay:
             decky.logger.error("%s", FFPLAY_MISSING)
@@ -163,7 +168,7 @@ class Plugin:
         reap_orphaned_ffplay("/proc", set(), lambda message: decky.logger.info("%s", message))
         self.player = Player(ffplay, os.path.join(log_dir, "ffplay.log"), env)
         self._game = GameMixer(
-            lambda args: pactl_run(env, args),
+            lambda args: pactl_run(self._audio_env, args),
             os.path.join(settings_dir, "game-audio.json"),
             lambda message: decky.logger.warning("%s", message),
         )
@@ -226,8 +231,33 @@ class Plugin:
         player = self.player
         return bool(player and player.process_alive() and not player.paused and self.tracks)
 
+    def _audio_info(self, env: dict[str, str]):
+        return pactl_run(env, ["info"])
+
+    def _try_connect_audio(self) -> bool:
+        def run_info(fresh: dict[str, str]):
+            result = self._audio_info(fresh)
+            if result is None:
+                return None
+            return result[0] == 0
+
+        return connect_user_audio(self._audio_env, dict(os.environ), run_info)
+
+    def _ensure_audio(self, wait: bool = False) -> bool:
+        if self._try_connect_audio():
+            return True
+        if not wait:
+            return False
+        if wait_for_audio(self._try_connect_audio, budget_s=20.0):
+            decky.logger.info("Pulse audio is ready")
+            return True
+        decky.logger.error("%s", AUDIO_NOT_READY)
+        return False
+
     def _sync_game_audio(self, force: bool = False) -> None:
         if self._game is None or self._game_restored:
+            return
+        if not self._ensure_audio():
             return
         playing = self._book_is_playing()
         game_volume = clamp_percent(self.settings.get("game_volume"), 100)
@@ -1132,6 +1162,10 @@ class Plugin:
             return {"success": False, "message": self.last_error}
         self.index = index
         self.rest_offset_ms = offset_ms
+        if not await _to_thread(self._ensure_audio, True):
+            self.last_error = AUDIO_NOT_READY
+            self._kick_game_audio()
+            return {"success": False, "message": self.last_error}
         try:
             url, headers = await self._plex(
                 lambda client: (client.stream_url(track.part_key), client.media_headers())
@@ -1167,11 +1201,8 @@ class Plugin:
         await asyncio.sleep(0.6)
         exit_code = self.player.poll()
         if exit_code is not None:
-            self.last_error = (
-                "Playback stopped immediately. The server may be unreachable, "
-                "or this file isn't one ffplay can play."
-            )
             log = self.player.read_log([self.settings.get("token") or ""])
+            self.last_error = playback_failure_message(log)
             if log:
                 decky.logger.error("ffplay: %s", log[:400])
             self.player.stop()
@@ -1316,7 +1347,10 @@ class Plugin:
         self.player.mark_inactive()
         if log:
             decky.logger.error("ffplay: %s", log[:400])
-        self.last_error = "Playback stopped unexpectedly. Check that the server is reachable."
+        self.last_error = (
+            AUDIO_NOT_READY if playback_failure_message(log) == AUDIO_NOT_READY
+            else "Playback stopped unexpectedly. Check that the server is reachable."
+        )
         await self._report_locked(self.tracks[self.index], "stopped", position, finishing=False)
         self._kick_game_audio()
 

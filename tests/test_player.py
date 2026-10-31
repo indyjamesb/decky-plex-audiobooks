@@ -5,18 +5,24 @@ import subprocess
 import tempfile
 import time
 import unittest
+import unittest.mock
 
 from player import (
+    AUDIO_NOT_READY,
     FFPLAY_MISSING,
     Player,
+    SERVER_UNREACHABLE_PLAYBACK,
     build_child_env,
     build_ffplay_args,
+    connect_user_audio,
     ffplay_missing_message,
     find_ffplay,
     find_orphaned_ffplay,
+    playback_failure_message,
     reap_orphaned_ffplay,
     redact_text,
     stop_ffplay_pid,
+    wait_for_audio,
 )
 
 class EnvTests(unittest.TestCase):
@@ -77,6 +83,59 @@ class FfplayLookupTests(unittest.TestCase):
             handle.write(cmdline)
         with open(os.path.join(folder, "status"), "w", encoding="utf-8") as handle:
             handle.write(f"State:\t{state}\n")
+
+    def test_audio_wait_retries_until_the_socket_answers(self):
+        attempts = {"n": 0, "t": 0.0}
+        env: dict[str, str] = {}
+
+        def fake_socket():
+            attempts["n"] += 1
+            if attempts["n"] < 3:
+                return ""
+            return "/run/user/1000/pulse/native"
+
+        def ready():
+            return connect_user_audio(env, {"PATH": "/usr/bin", "HOME": "/home/deck"}, lambda _fresh: True)
+
+        def clock():
+            return attempts["t"]
+
+        def sleep(delay):
+            attempts["t"] += delay
+
+        with unittest.mock.patch("player.find_pulse_socket", fake_socket):
+            self.assertTrue(wait_for_audio(ready, budget_s=20, sleep=sleep, clock=clock))
+        self.assertGreaterEqual(attempts["n"], 3)
+        self.assertLess(attempts["t"], 20)
+        self.assertEqual(env["PULSE_SERVER"], "/run/user/1000/pulse/native")
+        self.assertEqual(env["XDG_RUNTIME_DIR"], "/run/user/1000")
+
+    def test_audio_never_ready_is_not_a_server_error(self):
+        def clock_and_sleep():
+            now = {"t": 0.0}
+
+            def clock():
+                return now["t"]
+
+            def sleep(delay):
+                now["t"] += delay
+
+            return clock, sleep
+
+        clock, sleep = clock_and_sleep()
+        self.assertFalse(wait_for_audio(lambda: False, budget_s=20, sleep=sleep, clock=clock))
+        self.assertGreaterEqual(clock(), 20)
+        self.assertNotIn("unreachable", AUDIO_NOT_READY.lower())
+        self.assertNotIn("server", AUDIO_NOT_READY.lower())
+        self.assertNotEqual(AUDIO_NOT_READY, SERVER_UNREACHABLE_PLAYBACK)
+
+    def test_ffplay_pulse_stderr_maps_to_the_audio_message(self):
+        log = "Could not initialize SDL - Could not setup connection to PulseAudio"
+        self.assertEqual(playback_failure_message(log), AUDIO_NOT_READY)
+        self.assertNotIn("unreachable", playback_failure_message(log))
+        other = "Server returned 404 Not Found"
+        self.assertEqual(playback_failure_message(other), SERVER_UNREACHABLE_PLAYBACK)
+        self.assertIn("unreachable", SERVER_UNREACHABLE_PLAYBACK)
 
     def test_missing_ffplay_has_a_panel_message(self):
         self.assertEqual(ffplay_missing_message(""), FFPLAY_MISSING)

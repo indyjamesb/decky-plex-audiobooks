@@ -163,6 +163,11 @@ def _clean_path_list(value: str) -> str:
 
 
 FFPLAY_MISSING = "ffplay not found. Install ffmpeg to play books."
+AUDIO_NOT_READY = "Audio isn't ready yet. Try again in a few seconds."
+SERVER_UNREACHABLE_PLAYBACK = (
+    "Playback stopped immediately. The server may be unreachable, "
+    "or this file isn't one ffplay can play."
+)
 
 
 def find_ffplay() -> str:
@@ -176,6 +181,72 @@ def ffplay_missing_message(path: str) -> str:
     """Empty when ffplay is available. The sentence is shown in the panel."""
 
     return "" if path else FFPLAY_MISSING
+
+
+def is_pulse_audio_error(log: str) -> bool:
+    """True when ffplay died because SDL could not reach PulseAudio or PipeWire."""
+
+    text = (log or "").lower()
+    if "could not setup connection to pulseaudio" in text:
+        return True
+    if "could not initialize sdl" in text and "pulse" in text:
+        return True
+    return False
+
+
+def playback_failure_message(log: str) -> str:
+    """Panel text for an ffplay process that exited immediately.
+
+    A missing audio service is not a Plex failure. The server sentence is
+    only for other early exits.
+    """
+
+    if is_pulse_audio_error(log):
+        return AUDIO_NOT_READY
+    return SERVER_UNREACHABLE_PLAYBACK
+
+
+def connect_user_audio(env: dict[str, str], source: dict[str, str], run_info=None) -> bool:
+    """Point ``env`` at the desktop user's Pulse socket once it answers.
+
+    ``run_info`` returns True when ``pactl info`` succeeds with the candidate
+    environment, False when it fails, and None when pactl is not installed.
+    A socket that accepts a connection is enough if pactl is absent. The
+    updated environment sets ``XDG_RUNTIME_DIR`` and ``PULSE_SERVER``.
+    """
+
+    socket_path = find_pulse_socket()
+    if not socket_path:
+        return False
+    fresh = build_child_env(source, socket_path)
+    if run_info is not None:
+        info = run_info(fresh)
+        if info is False:
+            return False
+    elif not _socket_answers(socket_path):
+        return False
+    env.clear()
+    env.update(fresh)
+    return True
+
+
+def wait_for_audio(ready, *, budget_s: float = 20.0, sleep=time.sleep, clock=time.monotonic) -> bool:
+    """Call ``ready`` until it is true or ``budget_s`` has passed.
+
+    The pause between tries starts at 0.25 s and doubles up to 2 s.
+    ``sleep`` and ``clock`` are injectable so tests do not wait on a reboot.
+    """
+
+    delay = 0.25
+    started = clock()
+    while True:
+        if ready():
+            return True
+        elapsed = clock() - started
+        if elapsed >= budget_s:
+            return False
+        sleep(min(delay, budget_s - elapsed))
+        delay = min(delay * 2, 2.0)
 
 
 def _socket_answers(path: str) -> bool:
@@ -279,7 +350,7 @@ def build_ffplay_args(
     if filters:
         args.extend(["-af", ",".join(filters)])
     if url.startswith(("http://", "https://")):
-        args.extend(["-user_agent", "PlexAudiobooks/0.5.1"])
+        args.extend(["-user_agent", "PlexAudiobooks/0.5.2"])
         if headers:
             args.extend(["-headers", headers])
     args.append(url)
