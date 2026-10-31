@@ -1,6 +1,6 @@
 {
   "name": "plex-audiobooks",
-  "version": "0.1.6",
+  "version": "0.5.0",
   "description": "Decky Loader plugin that plays Plex audiobooks in the background on Steam Deck and saves the listening position to Plex.",
   "type": "module",
   "scripts": {

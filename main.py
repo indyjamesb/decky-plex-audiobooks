@@ -18,7 +18,16 @@ import decky
 
 from deck_hid import DeckHidWatcher, migrate_shortcut, normalize_buttons
 from game_audio import GameMixer, clamp_percent, pactl_run, truthy
-from player import Player, PlayerError, build_child_env, find_ffplay, find_pulse_socket, set_process_volume
+from player import (
+    FFPLAY_MISSING,
+    Player,
+    PlayerError,
+    build_child_env,
+    ffplay_missing_message,
+    find_ffplay,
+    find_pulse_socket,
+    set_process_volume,
+)
 from plex import PlexClient, PlexError, normalize_server_url
 from plex_auth import (
     CANNOT_REACH,
@@ -47,7 +56,7 @@ from progress import (
     track_is_complete,
 )
 
-VERSION = "0.1.6"
+VERSION = "0.5.0"
 REPORT_INTERVAL_S = 10
 _PY_LOG_LEVELS = {
     "error": logging.ERROR,
@@ -146,7 +155,11 @@ class Plugin:
         log_dir = decky.DECKY_PLUGIN_LOG_DIR
         os.makedirs(log_dir, exist_ok=True)
         env = build_child_env(dict(os.environ), find_pulse_socket())
-        self.player = Player(find_ffplay(), os.path.join(log_dir, "ffplay.log"), env)
+        ffplay = find_ffplay()
+        if not ffplay:
+            decky.logger.error("%s", FFPLAY_MISSING)
+            self.last_error = FFPLAY_MISSING
+        self.player = Player(ffplay, os.path.join(log_dir, "ffplay.log"), env)
         self._game = GameMixer(
             lambda args: pactl_run(env, args),
             os.path.join(settings_dir, "game-audio.json"),
@@ -909,10 +922,22 @@ class Plugin:
     # Playback
     # ------------------------------------------------------------------
 
+    def _require_ffplay(self) -> str | None:
+        path = self.player.ffplay if self.player is not None else find_ffplay()
+        message = ffplay_missing_message(path)
+        if not message:
+            return None
+        decky.logger.error("%s", message)
+        self.last_error = message
+        return message
+
     async def play_book(self, album_key: str, track_index: int, offset_ms: int):
         problem = self._configured_message()
         if problem:
             return {"success": False, "message": problem}
+        missing = self._require_ffplay()
+        if missing:
+            return {"success": False, "message": missing}
         try:
             book, tracks = await self._plex(lambda client: client.get_book(str(album_key)))
         except PlexError as err:

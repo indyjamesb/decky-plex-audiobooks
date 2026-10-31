@@ -4,6 +4,7 @@ import {
   Focusable,
   PanelSection,
   PanelSectionRow,
+  DropdownItem,
   SliderField,
   TextField,
   ToggleField,
@@ -900,7 +901,7 @@ function SettingsView({
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [logLevel, setLogLevelIndex] = useState(2);
+  const [logLevel, setLogLevelName] = useState("info");
 
   async function loadLibraries(url: string, suppliedToken = "") {
     const result = await testConnection(url, suppliedToken);
@@ -930,9 +931,7 @@ function SettingsView({
         setLibraryKey(settings.library_key);
         const levelName = settings.log_level || "info";
         setClientLogLevel(levelName);
-        setLogLevelIndex(["error", "warning", "info", "debug"].indexOf(levelName) >= 0
-          ? ["error", "warning", "info", "debug"].indexOf(levelName)
-          : 2);
+        setLogLevelName(["error", "warning", "info", "debug"].includes(levelName) ? levelName : "info");
         if (settings.has_token && settings.server_url) {
           await loadLibraries(settings.server_url);
         } else if (settings.auth_method === "link" && settings.signed_in) {
@@ -1282,25 +1281,19 @@ function SettingsView({
       )}
       <PanelSection title="Log">
         <PanelSectionRow>
-          <SliderField
+          <DropdownItem
             label="Log level"
-            description="Debug records controller button presses. Use Debug for a shortcut test, then set it back to Info."
-            value={logLevel}
-            min={0}
-            max={3}
-            step={1}
-            notchCount={4}
-            notchTicksVisible={true}
-            notchLabels={[
-              { label: "Error", notchIndex: 0, value: 0 },
-              { label: "Warning", notchIndex: 1, value: 1 },
-              { label: "Info", notchIndex: 2, value: 2 },
-              { label: "Debug", notchIndex: 3, value: 3 },
+            description="Use Debug only when testing."
+            rgOptions={[
+              { data: "error", label: "Error" },
+              { data: "warning", label: "Warning" },
+              { data: "info", label: "Info" },
+              { data: "debug", label: "Debug" },
             ]}
-            onChange={(value) => {
-              const index = Math.max(0, Math.min(3, Math.round(value)));
-              const name = (["error", "warning", "info", "debug"] as const)[index];
-              setLogLevelIndex(index);
+            selectedOption={logLevel}
+            onChange={(option) => {
+              const name = String(option?.data || "info");
+              setLogLevelName(name);
               void (async () => {
                 await setLogLevel(name);
                 setClientLogLevel(name);

@@ -74,11 +74,20 @@ def _clean_path_list(value: str) -> str:
     return ":".join(kept)
 
 
+FFPLAY_MISSING = "ffplay not found. Install ffmpeg to play books."
+
+
 def find_ffplay() -> str:
     for candidate in ("/usr/bin/ffplay", "/bin/ffplay", "/usr/local/bin/ffplay"):
         if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
             return candidate
     return shutil.which("ffplay") or ""
+
+
+def ffplay_missing_message(path: str) -> str:
+    """Empty when ffplay is available. The sentence is shown in the panel."""
+
+    return "" if path else FFPLAY_MISSING
 
 
 def _socket_answers(path: str) -> bool:
@@ -182,7 +191,7 @@ def build_ffplay_args(
     if filters:
         args.extend(["-af", ",".join(filters)])
     if url.startswith(("http://", "https://")):
-        args.extend(["-user_agent", "PlexAudiobooks/0.1.6"])
+        args.extend(["-user_agent", "PlexAudiobooks/0.5.0"])
         if headers:
             args.extend(["-headers", headers])
     args.append(url)

@@ -5,7 +5,15 @@ import tempfile
 import time
 import unittest
 
-from player import Player, build_child_env, build_ffplay_args, find_ffplay, redact_text
+from player import (
+    FFPLAY_MISSING,
+    Player,
+    build_child_env,
+    build_ffplay_args,
+    ffplay_missing_message,
+    find_ffplay,
+    redact_text,
+)
 
 
 class EnvTests(unittest.TestCase):
@@ -31,6 +39,14 @@ class EnvTests(unittest.TestCase):
         env = build_child_env({"PATH": "/usr/bin", "HOME": "/home/deck"}, "/run/user/1000/pulse/native")
         self.assertEqual(env["PULSE_SERVER"], "/run/user/1000/pulse/native")
         self.assertEqual(env["XDG_RUNTIME_DIR"], "/run/user/1000")
+
+
+class FfplayLookupTests(unittest.TestCase):
+    def test_missing_ffplay_has_a_panel_message(self):
+        self.assertEqual(ffplay_missing_message(""), FFPLAY_MISSING)
+        self.assertEqual(ffplay_missing_message("/usr/bin/ffplay"), "")
+        self.assertIn("ffplay", FFPLAY_MISSING)
+        self.assertIn("ffmpeg", FFPLAY_MISSING)
 
 
 class ArgTests(unittest.TestCase):

@@ -6,6 +6,10 @@ Version 0.1 is a small player. One server, one library, browse and search, backg
 
 ## Changelog
 
+### 0.5.0
+
+First public release. Tested on Steam Deck OLED. Log level is a menu instead of a slider. If ffplay is missing, the panel says to install ffmpeg.
+
 ### 0.1.6
 
 Tested on Steam Deck OLED. A Game volume slider sets other application streams, and the book can lower them while it plays. Pausing the book puts the game back. The book slider is labeled Book volume.
@@ -33,13 +37,13 @@ The shortcut used `RegisterForControllerInputMessages` after `RegisterForControl
 Build the zip on a computer (or on the Deck, if Node is installed), then copy it over. Decky does not need its plugin store for this.
 
 1. Install [Decky Loader](https://decky.xyz/) if it is not already installed.
-2. Copy `release/plex-audiobooks-v0.1.6.zip` to the Deck. The zip in this repository is already built.
+2. Copy `release/plex-audiobooks-v0.5.0.zip` to the Deck. The zip in this repository is already built.
 3. In Desktop Mode, or over SSH:
 
 ```bash
 mkdir -p ~/homebrew/plugins
 cd ~/homebrew/plugins
-unzip -o /path/to/plex-audiobooks-v0.1.6.zip
+unzip -o /path/to/plex-audiobooks-v0.5.0.zip
 ```
 
 The zip already contains a `plex-audiobooks` folder. You should end up with:
@@ -70,7 +74,7 @@ pnpm test
 pnpm run package
 ```
 
-`pnpm test` runs the Python unit tests. `pnpm run package` writes `release/plex-audiobooks-v0.1.6.zip`.
+`pnpm test` runs the Python unit tests. `pnpm run package` writes `release/plex-audiobooks-v0.5.0.zip`.
 
 `pnpm run build` only produces `dist/index.js`. A manual install without the zip is the plugin directory containing `dist/`, `main.py`, `deck_hid.py`, `game_audio.py`, `player.py`, `plex.py`, `plex_auth.py`, `progress.py`, `plugin.json`, `package.json`, `LICENSE`, `NOTICE`, and `README.md`.
 
@@ -100,7 +104,11 @@ Whether Plex keeps your place in a file is a setting on the library in Plex Medi
 
 In Plex web: open the library, **Manage Library**, **Edit**, **Advanced**, and turn on **Store track progress**.
 
-With that setting on, a position from another Plex audiobook app showed up in Plex as the track’s `viewOffset`, and this plugin can resume there and write the position back. With it off, Plex only stored `viewCount` (the track marked played). It did not keep a spot in the middle of a file, so other Plex apps cannot resume mid-track. The panel shows **Resume in Plex: On** or **Off** for the library you select.
+With that setting on, a position from another Plex app showed up in Plex as the track’s `viewOffset`, and this plugin can resume there and write the position back. With it off, Plex only stored `viewCount` (the track marked played). It did not keep a spot in the middle of a file, so other Plex apps cannot resume mid-track. The panel shows **Resume in Plex: On** or **Off** for the library you select.
+
+## Playback in other apps
+
+With **Store track progress** on, this plugin writes your place in each chapter file to Plex. Plex and Plexamp do not remember which file of a multi-file book you were on. Some other audiobook apps do not read progress back from Plex at all. A spot saved on the Deck may not show up there, and you may need to set it in that app yourself.
 
 ## How to listen
 
@@ -114,7 +122,7 @@ With that setting on, a position from another Plex audiobook app showed up in Pl
 - **Play/pause button** defaults to R4, including while a game is focused. The backend reads the Deck controller at `/dev/hidraw` (USB `28DE:1205`) and toggles playback itself, so it still works after the Quick Access Menu closes. One button fires on press. A combo fires when those buttons are held together. Repeats inside 400 ms are ignored. **Clear** turns it off. **Program button** waits until every button is up, then records the next press (release, or about 2 seconds from the first press). The A press that opens Program is not saved. The panel shows the result, for example `R4` or `L4 + R4`, and **Cancel** aborts. Leave a back button unbound in that game’s Steam Input layout; a combo can still reach the game. Touch bits are ignored.
 - L4 (byte 13 bit `0x02`) and R4 (byte 13 bit `0x04`) were captured in a game. Other names follow Linux `drivers/hid/hid-steam.c` (`steam_do_deck_input_event`) and SDL `SDL_hidapi_steamdeck.c` (`SteamDeckButtons`). Those other names were not pressed in that capture. Set **Log level** to Debug. Lines look like `hidraw nodes hidraw2`, `hidraw input hidraw2`, `hidraw buttons R4`, and `hidraw shortcut fire R4`. Each toggle also writes one Info line: `Shortcut toggled playback (hidraw)`.
 - `SteamClient.Input.RegisterForControllerInputMessages` is still registered for the Steam UI. It does not toggle while the hidraw reader is open, so one press is not applied twice. On the Steam client from Oct 31 2026 that callback does not run in a game.
-- **Log level** is a slider in settings (Error, Warning, Info, Debug), saved, default Info, same idea as MagicPods’ log-level slider. Controller diagnostics are Debug only. For a shortcut test, set Log level to Debug. Lines are written to `~/homebrew/logs/plex-audiobooks/plugin.log` with a `frontend:` prefix. Debug logging is for this test; leave it on Info afterwards.
+- **Log level** is a menu in settings (Error, Warning, Info, Debug), saved, default Info. Controller diagnostics are Debug only. For a shortcut test, set Log level to Debug. Lines are written to `~/homebrew/logs/plex-audiobooks/plugin.log` with a `frontend:` prefix. Use Debug only when testing.
 
 ### Progress sync
 
@@ -148,13 +156,13 @@ Sign-in and playback were confirmed on a Steam Deck OLED outside this environmen
 - Embedded chapters inside one `.m4b`. Next and previous follow Plex tracks. If Plex shows the book as one file, there is one chapter.
 - This environment did not open `/dev/hidraw`. On a Deck, in-game captures confirmed L4 and R4 and a right-stick touch bit. The reader, the Program-button timing, and every other button name were not re-checked here.
 - Whether a back button left unbound in a game’s Steam Input layout still shows up in the hidraw report. The capture was of the physical buttons, not of a game’s layout.
-- Bluetooth Xbox and PlayStation controllers. They are not read in 0.1.4. See the roadmap.
+- Bluetooth Xbox and PlayStation controllers. They are not read in 0.5.0. See the roadmap.
 - Position accuracy during a long stream. The position is wall-clock time since ffplay started, times the speed, plus the seek point. If the stream buffers, the bar can run ahead of the audio. Seeking restarts ffplay, so there is a short gap.
 - Live volume when `pactl` is missing.
 
 ## Roadmap
 
-Bluetooth Xbox and PlayStation pads are not in 0.1.4. The in-game shortcut reads the Deck’s built-in controller (`28DE:1205` on hidraw) and does not open evdev devices. A later build could watch those pads with evdev. TODO.
+Bluetooth Xbox and PlayStation pads are not in 0.5.0. The in-game shortcut reads the Deck’s built-in controller (`28DE:1205` on hidraw) and does not open evdev devices. A later build could watch those pads with evdev. TODO.
 
 Not in 0.1.1. A separate **Game volume** slider, so a dungeon’s music can drop while the book stays up, is feasible and is not safe enough to ship yet.
 
