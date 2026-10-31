@@ -22,7 +22,11 @@ import {
   listServers,
   setBookSort,
   setLogLevel,
+  cancelShortcutCapture,
+  hidrawStatus,
   setPlayPauseButtons,
+  shortcutCaptureState,
+  startShortcutCapture,
   nextChapter,
   playBook,
   pollSignIn,
@@ -41,6 +45,7 @@ import {
 import {
   bindingLabel,
   cancelProgramming,
+  captureSnapshot,
   replayRegistrationLog,
   setShortcutButtons,
   startProgramming,
@@ -647,17 +652,31 @@ function BookView({
   );
 }
 
+function captureMessage(phase: string, buttons: string[], secondsLeft: number | null): string {
+  if (phase === "wait_release") return "Release every button.";
+  if (phase === "listen") {
+    const label = buttons.length ? buttons.join(" + ") : "Press the shortcut";
+    if (secondsLeft == null) return `${label}. Release to save.`;
+    return `${label} · ${secondsLeft.toFixed(1)}s`;
+  }
+  if (phase === "done") return buttons.length ? buttons.join(" + ") : "Not set";
+  if (phase === "timeout") return "Nothing pressed. Cancelled.";
+  return "Cancelled.";
+}
+
 function PlayPauseTrigger() {
-  const [buttons, setButtons] = useState<number[]>([]);
+  const [buttons, setButtons] = useState<string[]>([]);
   const [recording, setRecording] = useState(false);
   const [message, setMessage] = useState("");
+  const useHidraw = useRef(false);
+  const startedAt = useRef(0);
 
   useEffect(() => {
     let stop = false;
     void getSettings()
       .then((settings) => {
         if (stop) return;
-        const next = settings.play_pause_actions || [];
+        const next = settings.play_pause_buttons ?? ["R4"];
         setButtons(next);
         setShortcutButtons(next);
         setClientLogLevel(settings.log_level || "info");
@@ -666,16 +685,50 @@ function PlayPauseTrigger() {
     return () => {
       stop = true;
       cancelProgramming();
+      void cancelShortcutCapture().catch(() => undefined);
     };
   }, []);
 
-  async function save(next: number[]) {
+  useEffect(() => {
+    if (!recording) return;
+    let stop = false;
+    let saved = false;
+    const tick = async () => {
+      const state = useHidraw.current ? await shortcutCaptureState() : captureSnapshot();
+      if (stop || saved) return;
+      const elapsed = Date.now() - startedAt.current;
+      const idleTooLong = elapsed >= 8000 && state.phase !== "done" && (state.buttons || []).length === 0;
+      if (state.phase === "done") {
+        saved = true;
+        setRecording(false);
+        await save(state.buttons || []);
+        return;
+      }
+      if (state.phase === "timeout" || state.phase === "cancelled" || idleTooLong) {
+        saved = true;
+        setRecording(false);
+        cancelProgramming();
+        void cancelShortcutCapture().catch(() => undefined);
+        setMessage(state.phase === "timeout" || idleTooLong ? "Nothing pressed. Cancelled." : "Cancelled.");
+        return;
+      }
+      setMessage(captureMessage(state.phase, state.buttons || [], state.seconds_left));
+    };
+    const id = window.setInterval(() => void tick(), 200);
+    void tick();
+    return () => {
+      stop = true;
+      window.clearInterval(id);
+    };
+  }, [recording]);
+
+  async function save(next: string[]) {
     const result = await setPlayPauseButtons(next);
     if (!result.success) {
       setMessage(result.message || "Couldn't save that button.");
       return;
     }
-    const saved = result.play_pause_actions || next;
+    const saved = result.play_pause_buttons ?? next;
     setButtons(saved);
     setShortcutButtons(saved);
     setMessage(saved.length ? `Play/pause: ${bindingLabel(saved)}` : "Play/pause: Not set");
@@ -690,10 +743,10 @@ function PlayPauseTrigger() {
       </PanelSectionRow>
       <PanelSectionRow>
         <div style={{ whiteSpace: "normal", fontSize: "0.85em" }}>
-          Program button, then press one button or hold several together on the same controller. One button toggles
-          on press. A combo must all be held briefly. An unknown code shows as Button N. Leave a back button unbound
-          in the game’s Steam Input layout; a combo can still reach the game. Checked on the Steam menu only, not in
-          a game and not with a Bluetooth pad. Set Log level to Debug before a test.
+          Default is R4, including in a game. Program button waits until you release every button, then records the
+          next press, so the A that opens Program is not saved. One button toggles on press. A combo is those buttons
+          held together. Leave a back button unbound in the game’s Steam Input layout; a combo can still reach the
+          game. Set Log level to Debug before a test.
         </div>
       </PanelSectionRow>
       <PanelSectionRow>
@@ -702,35 +755,39 @@ function PlayPauseTrigger() {
           onClick={() => {
             if (recording) {
               cancelProgramming();
+              void cancelShortcutCapture().catch(() => undefined);
               setRecording(false);
               setMessage("Cancelled.");
               return;
             }
-            setRecording(true);
-            setMessage("Hold the button or buttons.");
-            startProgramming((captured, reason) => {
-              setRecording(false);
-              if (reason === "timeout") {
-                setMessage("Nothing pressed. Cancelled.");
-                return;
+            void (async () => {
+              const status = await hidrawStatus().catch(() => ({ active: false }));
+              useHidraw.current = Boolean(status.active);
+              startedAt.current = Date.now();
+              setRecording(true);
+              setMessage("Release every button.");
+              if (useHidraw.current) {
+                const started = await startShortcutCapture();
+                if (!started.success) {
+                  useHidraw.current = false;
+                  startProgramming(() => undefined);
+                }
+              } else {
+                startProgramming(() => undefined);
               }
-              if (reason !== "captured" || !captured || captured.length === 0) {
-                setMessage("Cancelled.");
-                return;
-              }
-              void save(captured);
-            });
+            })();
           }}
         >
           {recording ? "Cancel" : "Program button"}
         </ButtonItem>
       </PanelSectionRow>
-      {buttons.length > 0 && (
+      {buttons.length > 0 && !recording && (
         <PanelSectionRow>
           <ButtonItem
             layout="below"
             onClick={() => {
               cancelProgramming();
+              void cancelShortcutCapture().catch(() => undefined);
               setRecording(false);
               void save([]);
             }}

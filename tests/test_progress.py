@@ -3,7 +3,6 @@ import unittest
 from progress import (
     AudioTrack,
     atempo_filters,
-    play_pause_actions,
     snap_speed,
     sort_books,
     book_position,
@@ -177,19 +176,6 @@ class ReportMathTests(unittest.TestCase):
         self.assertEqual(snap_speed(0.49), 0.5)
         self.assertEqual(snap_speed(3.2), 3.0)
         self.assertEqual(snap_speed(2.55), 2.55)
-
-    def test_play_pause_binding_migrates_names_to_actions(self):
-        self.assertEqual(play_pause_actions({"play_pause_mode": "back", "play_pause_back": "R4"}), [45])
-        self.assertEqual(
-            play_pause_actions({"play_pause_buttons": ["R4"]}),
-            [45],
-        )
-        self.assertEqual(
-            play_pause_actions({"play_pause_mode": "combo", "play_pause_combo": ["Select", "Y"]}),
-            [35, 3],
-        )
-        self.assertEqual(play_pause_actions({"play_pause_mode": "off"}), [])
-        self.assertEqual(play_pause_actions({"play_pause_actions": [45]}), [45])
 
     def test_book_sort_recently_played_falls_back(self):
         books = [

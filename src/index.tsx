@@ -16,7 +16,7 @@ export default definePlugin(() => {
   void getSettings()
     .then((settings) => {
       setClientLogLevel(settings.log_level || "info");
-      setShortcutButtons(settings.play_pause_actions || []);
+      setShortcutButtons(settings.play_pause_buttons ?? ["R4"]);
       startControllerShortcut();
     })
     .catch(() => {

@@ -18,6 +18,7 @@ ZIP_PATH = OUT_DIR / f"plex-audiobooks-v{VERSION}.zip"
 FILES = [
     "dist/index.js",
     "main.py",
+    "deck_hid.py",
     "player.py",
     "plex.py",
     "plex_auth.py",

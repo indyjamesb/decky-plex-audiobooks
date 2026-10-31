@@ -4,18 +4,28 @@ A Decky Loader plugin for Steam Deck (SteamOS 3.9.x, Game Mode). It plays audiob
 
 Version 0.1 is a small player. One server, one library, browse and search, background playback, and resume sync.
 
+## Changelog
+
+### 0.1.4
+
+Play/pause works while a game is focused. The Steam UI callback only runs when the Steam UI has focus, so the backend reads the Deck controller on `/dev/hidraw` and toggles playback itself. The default shortcut is R4. A saved action code 45 from 0.1.3 becomes R4. Program button waits until every button is released, then records the next press, so the A press that opens Program is not saved.
+
+### 0.1.3
+
+The shortcut used `RegisterForControllerInputMessages` after `RegisterForControllerStateChanges` disappeared. That path still only runs while the Steam UI is focused.
+
 ## Install on the Deck
 
 Build the zip on a computer (or on the Deck, if Node is installed), then copy it over. Decky does not need its plugin store for this.
 
 1. Install [Decky Loader](https://decky.xyz/) if it is not already installed.
-2. Copy `release/plex-audiobooks-v0.1.3.zip` to the Deck. The zip in this repository is already built.
+2. Copy `release/plex-audiobooks-v0.1.4.zip` to the Deck. The zip in this repository is already built.
 3. In Desktop Mode, or over SSH:
 
 ```bash
 mkdir -p ~/homebrew/plugins
 cd ~/homebrew/plugins
-unzip -o /path/to/plex-audiobooks-v0.1.3.zip
+unzip -o /path/to/plex-audiobooks-v0.1.4.zip
 ```
 
 The zip already contains a `plex-audiobooks` folder. You should end up with:
@@ -46,9 +56,9 @@ pnpm test
 pnpm run package
 ```
 
-`pnpm test` runs the Python unit tests. `pnpm run package` writes `release/plex-audiobooks-v0.1.3.zip`.
+`pnpm test` runs the Python unit tests. `pnpm run package` writes `release/plex-audiobooks-v0.1.4.zip`.
 
-`pnpm run build` only produces `dist/index.js`. A manual install without the zip is the plugin directory containing `dist/`, `main.py`, `player.py`, `plex.py`, `plex_auth.py`, `progress.py`, `plugin.json`, `package.json`, `LICENSE`, `NOTICE`, and `README.md`.
+`pnpm run build` only produces `dist/index.js`. A manual install without the zip is the plugin directory containing `dist/`, `main.py`, `deck_hid.py`, `player.py`, `plex.py`, `plex_auth.py`, `progress.py`, `plugin.json`, `package.json`, `LICENSE`, `NOTICE`, and `README.md`.
 
 ## Setup
 
@@ -87,8 +97,9 @@ With that setting on, a position from another Plex audiobook app showed up in Pl
 - **Speed** moves in steps of 0.05 from 0.50x to 3.00x, so 1.20x is a real step. The last speed is saved. Changing it restarts the file at the current position.
 - **Volume** is the audiobook only. On SteamOS it is applied with `pactl` when that exists. Otherwise it is applied the next time a file starts.
 - The book bar is your place in the whole book. The chapter bar is your place in the current file.
-- **Play/pause button** starts as not set. **Program button**, then press one button or hold several together on the same controller (the Deck or whichever pad is sending events). Releasing them, or holding them for a moment, saves that set. One button toggles on press. Two or more must all be held briefly. **Clear** turns it off. A saved name from 0.1.2 is converted: `R4` becomes action 45. The panel shows a name from Steam’s `ControllerInputGamepadButton` list in `@decky/ui` (A, B, X, Y, L1, R1, L4, R4, Steam, Select, and so on). An unknown code shows as `Button N`. Only action 45 was confirmed on hardware, as the Deck’s R4, on the Steam menu with no game running. L4 is 44, L5 is 32, and R5 is 33 in that same list; those three were not pressed in the hardware check. Touchpad and stick directions are ignored so they are not saved as a shortcut. Leave a back button unbound in that game’s Steam Input layout so the game ignores it. A combo can still reach the game. If the combo includes Steam, the plugin asks Steam to suppress the Quick Access Menu for that hold. Set **Log level** to Debug before a test.
-- The listener is `SteamClient.Input.RegisterForControllerInputMessages`. On the Steam client from Oct 31 2026 (Chrome/126.0.6478.183) `RegisterForControllerStateChanges` is gone, which is why 0.1.2 logged `frontend: controller registration exists=undefined`. The old callback is used only if that function is still present. Each Debug callback line looks like `frontend: controller callback controller=15 action=45 pressed=true name=R4`. A successful hook looks like `frontend: controller registration succeeded api=RegisterForControllerInputMessages`. [MagicPods](https://github.com/steam3d/MagicPodsDecky)’s installed build still calls the removed function, so it does not see buttons on this client either.
+- **Play/pause button** defaults to R4, including while a game is focused. The backend reads the Deck controller at `/dev/hidraw` (USB `28DE:1205`) and toggles playback itself, so it still works after the Quick Access Menu closes. One button fires on press. A combo fires when those buttons are held together. Repeats inside 400 ms are ignored. **Clear** turns it off. **Program button** waits until every button is up, then records the next press (release, or about 2 seconds from the first press). The A press that opens Program is not saved. The panel shows the result, for example `R4` or `L4 + R4`, and **Cancel** aborts. Leave a back button unbound in that game’s Steam Input layout; a combo can still reach the game. Touch bits are ignored.
+- L4 (byte 13 bit `0x02`) and R4 (byte 13 bit `0x04`) were captured in a game. Other names follow Linux `drivers/hid/hid-steam.c` (`steam_do_deck_input_event`) and SDL `SDL_hidapi_steamdeck.c` (`SteamDeckButtons`). Those other names were not pressed in that capture. Set **Log level** to Debug. Lines look like `hidraw nodes hidraw2`, `hidraw input hidraw2`, `hidraw buttons R4`, and `hidraw shortcut fire R4`. Each toggle also writes one Info line: `Shortcut toggled playback (hidraw)`.
+- `SteamClient.Input.RegisterForControllerInputMessages` is still registered for the Steam UI. It does not toggle while the hidraw reader is open, so one press is not applied twice. On the Steam client from Oct 31 2026 that callback does not run in a game.
 - **Log level** is a slider in settings (Error, Warning, Info, Debug), saved, default Info, same idea as MagicPods’ log-level slider. Controller diagnostics are Debug only. For a shortcut test, set Log level to Debug. Lines are written to `~/homebrew/logs/plex-audiobooks/plugin.log` with a `frontend:` prefix. Debug logging is for this test; leave it on Info afterwards.
 
 ### Progress sync
@@ -121,13 +132,15 @@ Sign-in and playback were confirmed on a Steam Deck outside this environment. Th
 - Sleep. When the Deck sleeps, playback stops. Nothing in this plugin keeps the device awake.
 - Bluetooth output, remote Plex URLs, and HTTPS servers with a private certificate. The client verifies HTTPS certificates.
 - Embedded chapters inside one `.m4b`. Next and previous follow Plex tracks. If Plex shows the book as one file, there is one chapter.
-- The play/pause button while a game is focused. The Oct 31 2026 check was on the Steam menu with no game running. It is also unknown whether a button left unbound in a game’s Steam Input layout still emits an action code.
-- Bluetooth Xbox and PlayStation controllers. The shortcut matches a combo on one controller index and Program button accepts whichever controller pressed, but no external pad was attached for that check.
-- Action names other than R4 (action 45). The other labels follow `ControllerInputGamepadButton` in `@decky/ui`. A mixed press on the Deck also produced actions 31, 1, 23, and 21, which that list calls R1, B, left-stick right, and left-stick down. Those names were not confirmed by pressing only that control.
+- This environment did not open `/dev/hidraw`. On a Deck, in-game captures confirmed L4 and R4 and a right-stick touch bit. The reader, the Program-button timing, and every other button name were not re-checked here.
+- Whether a back button left unbound in a game’s Steam Input layout still shows up in the hidraw report. The capture was of the physical buttons, not of a game’s layout.
+- Bluetooth Xbox and PlayStation controllers. They are not read in 0.1.4. See the roadmap.
 - Position accuracy during a long stream. The position is wall-clock time since ffplay started, times the speed, plus the seek point. If the stream buffers, the bar can run ahead of the audio. Seeking restarts ffplay, so there is a short gap.
 - Live volume when `pactl` is missing.
 
 ## Roadmap
+
+Bluetooth Xbox and PlayStation pads are not in 0.1.4. The in-game shortcut reads the Deck’s built-in controller (`28DE:1205` on hidraw) and does not open evdev devices. A later build could watch those pads with evdev. TODO.
 
 Not in 0.1.1. A separate **Game volume** slider, so a dungeon’s music can drop while the book stays up, is feasible and is not safe enough to ship yet.
 
@@ -149,7 +162,7 @@ That last step is why this stays off 0.1.1. A wrong pid match would turn down th
 
 ## Layout
 
-The project follows the [decky-plugin-template](https://github.com/SteamDeckHomebrew/decky-plugin-template): TypeScript in `src/` (`@decky/ui`, `@decky/api`) and a Python backend (`main.py`) that Decky loads. `plex_auth.py` talks to plex.tv, `plex.py` talks to a media server, `progress.py` is the resume math, and `player.py` owns ffplay.
+The project follows the [decky-plugin-template](https://github.com/SteamDeckHomebrew/decky-plugin-template): TypeScript in `src/` (`@decky/ui`, `@decky/api`) and a Python backend (`main.py`) that Decky loads. `deck_hid.py` reads the Deck controller, `plex_auth.py` talks to plex.tv, `plex.py` talks to a media server, `progress.py` is the resume math, and `player.py` owns ffplay.
 
 ## License
 

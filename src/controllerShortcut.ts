@@ -1,19 +1,17 @@
 import { Router } from "@decky/ui";
 
-import { togglePlayback } from "./api";
+import { hidrawStatus, shortcutToggle } from "./api";
 import { logFrontend } from "./logClient";
 
 /**
- * Play/pause listens to SteamClient.Input.RegisterForControllerInputMessages.
+ * Steam UI listener. RegisterForControllerInputMessages only runs while the
+ * Steam UI has focus, so it does not see in-game presses. When the backend
+ * hidraw reader is open, this path logs buttons but does not toggle; the
+ * backend toggles, and both share one 400 ms debounce if they overlap.
  *
- * On Steam from Oct 31 2026 (Chrome/126) RegisterForControllerStateChanges is
- * gone. The input-message callback is invoked as
- * (controllerIndex, action, pressed), which a rest parameter sees as
- * [15, 45, true]. Action 45 was confirmed as the Deck's R4. Other names come
- * from ControllerInputGamepadButton in @decky/ui (RBACK_UPPER = 45).
- *
- * The removed state-changes callback is only a fallback if that build still
- * has it. In-game delivery and Bluetooth pads were not tested.
+ * Program button, when hidraw is unavailable: ignore every held button
+ * (including the A press that opened Program) until all are released, then
+ * record the next gesture.
  */
 
 const ACTION_NAME: Record<number, string> = {
@@ -21,11 +19,11 @@ const ACTION_NAME: Record<number, string> = {
   1: "B",
   2: "X",
   3: "Y",
-  4: "D-pad up",
-  5: "D-pad right",
-  6: "D-pad down",
-  7: "D-pad left",
-  8: "Menu",
+  4: "Up",
+  5: "Right",
+  6: "Down",
+  7: "Left",
+  8: "Start",
   9: "View",
   25: "L3",
   28: "L2",
@@ -35,14 +33,20 @@ const ACTION_NAME: Record<number, string> = {
   32: "L5",
   33: "R5",
   34: "Steam",
-  35: "Select",
+  35: "View",
   36: "Start",
   41: "R3",
   44: "L4",
   45: "R4",
 };
 
-const STEAM_ACTION = 34;
+const BUTTON_ORDER = [
+  "R2", "L2", "R1", "L1", "Y", "B", "X", "A",
+  "Up", "Right", "Left", "Down", "View", "Steam", "Start",
+  "L5", "R5", "LPad", "RPad", "L3", "R3", "L4", "R4", "QAM",
+];
+
+const KNOWN = new Set(BUTTON_ORDER);
 
 const IGNORED_ACTIONS = new Set<number>([
   10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
@@ -52,24 +56,23 @@ const IGNORED_ACTIONS = new Set<number>([
   47, 48, 49, 50,
 ]);
 
-type ProgramListener = (actions: number[] | null, reason: "captured" | "timeout" | "cancelled") => void;
+type CapturePhase = "idle" | "wait_release" | "listen" | "done" | "timeout" | "cancelled";
+type ProgramListener = (buttons: string[] | null, reason: "captured" | "timeout" | "cancelled") => void;
 
-let binding: number[] = [];
+let binding: string[] = [];
 const held = new Map<number, Set<number>>();
-let programming = false;
-let programListener: ProgramListener | null = null;
-let programController: number | null = null;
-let peak: number[] = [];
-let gestureDown = false;
-let settleTimer: number | null = null;
-let programTimer: number | null = null;
+const prevNames = new Map<number, Set<string>>();
+let hidrawActive = false;
+let hidrawTimer: number | null = null;
+let capPhase: CapturePhase = "idle";
+let capButtons: string[] = [];
+let capStarted = 0;
+let capFirst: number | null = null;
+let capTimer: number | null = null;
+let capListener: ProgramListener | null = null;
 let unregister: { unregister: () => void } | null = null;
 let retryTimer: number | null = null;
 let retries = 0;
-let comboController: number | null = null;
-let comboArmed = false;
-let comboFired = false;
-let holdTimer: number | null = null;
 let qamSuppressed = false;
 let lastFire = 0;
 let lastCallbackLog = 0;
@@ -82,25 +85,31 @@ export function actionName(code: number): string {
   return ACTION_NAME[code] || `Button ${code}`;
 }
 
-export function bindingLabel(actions: number[]): string {
-  if (!actions.length) return "Not set";
-  return actions.map((code) => actionName(code)).join(" + ");
+export function bindingLabel(buttons: string[]): string {
+  if (!buttons.length) return "Not set";
+  return orderButtons(buttons).join(" + ");
 }
 
 export function registrationStatus(): string {
   return registrationReport;
 }
 
-export function setShortcutButtons(actions: number[]): void {
-  binding = actions.filter((code) => Number.isInteger(code) && code >= 0 && code <= 60 && !IGNORED_ACTIONS.has(code));
-  comboController = null;
-  comboArmed = false;
-  comboFired = false;
-  if (holdTimer !== null) {
-    window.clearTimeout(holdTimer);
-    holdTimer = null;
+export function hidrawIsActive(): boolean {
+  return hidrawActive;
+}
+
+function orderButtons(buttons: string[]): string[] {
+  const rank = new Map(BUTTON_ORDER.map((name, index) => [name, index]));
+  return [...new Set(buttons)].sort((a, b) => (rank.get(a) ?? 100) - (rank.get(b) ?? 100));
+}
+
+export function setShortcutButtons(buttons: string[]): void {
+  binding = orderButtons(buttons.filter((name) => KNOWN.has(name)));
+  prevNames.clear();
+  for (const [controller, actions] of held) {
+    prevNames.set(controller, namesFrom(actions));
   }
-  logDebug(`shortcut config actions=${binding.join(",") || "none"} label=${bindingLabel(binding)}`, true);
+  logDebug(`shortcut config buttons=${binding.join("+") || "none"} label=${bindingLabel(binding)}`, true);
 }
 
 function logDebug(message: string, force = false): void {
@@ -116,60 +125,78 @@ function logDebug(message: string, force = false): void {
   logFrontend("debug", message);
 }
 
-function clearProgramTimers(): void {
-  if (settleTimer !== null) window.clearTimeout(settleTimer);
-  if (programTimer !== null) window.clearTimeout(programTimer);
-  settleTimer = null;
-  programTimer = null;
+function namesFrom(actions: Set<number>): Set<string> {
+  const names = new Set<string>();
+  for (const code of actions) {
+    const name = ACTION_NAME[code];
+    if (name) names.add(name);
+  }
+  return names;
 }
 
-function finishProgramming(reason: "captured" | "timeout" | "cancelled", actions: number[]): void {
-  if (!programming) return;
-  programming = false;
-  clearProgramTimers();
-  const listener = programListener;
-  programListener = null;
-  programController = null;
-  peak = [];
-  gestureDown = false;
-  listener?.(reason === "captured" ? actions : null, reason);
+export function captureSnapshot(): { phase: CapturePhase; buttons: string[]; label: string; seconds_left: number | null } {
+  const now = Date.now();
+  if ((capPhase === "wait_release" || capPhase === "listen") && capButtons.length === 0 && now - capStarted >= 8000) {
+    finishCapture("timeout");
+  }
+  if (capPhase === "listen" && capFirst !== null && now - capFirst >= 2000) {
+    finishCapture("captured");
+  }
+  const secondsLeft = capPhase === "listen" && capFirst !== null ? Math.max(0, 2 - (now - capFirst) / 1000) : null;
+  return {
+    phase: capPhase,
+    buttons: capButtons.slice(),
+    label: capButtons.join(" + "),
+    seconds_left: secondsLeft,
+  };
+}
+
+function finishCapture(reason: "captured" | "timeout" | "cancelled"): void {
+  if (capPhase === "idle" || capPhase === "done" || capPhase === "timeout" || capPhase === "cancelled") return;
+  const buttons = reason === "captured" ? capButtons.slice() : [];
+  capPhase = reason === "captured" ? "done" : reason;
+  if (capTimer !== null) window.clearTimeout(capTimer);
+  capTimer = null;
+  const listener = capListener;
+  capListener = null;
+  listener?.(reason === "captured" ? buttons : null, reason);
 }
 
 export function startProgramming(listener: ProgramListener): void {
-  finishProgramming("cancelled", []);
-  programming = true;
-  programListener = listener;
-  peak = [];
-  gestureDown = false;
-  programController = null;
-  programTimer = window.setTimeout(() => finishProgramming("timeout", []), 8000);
+  finishCapture("cancelled");
+  capPhase = "wait_release";
+  capButtons = [];
+  capFirst = null;
+  capStarted = Date.now();
+  capListener = listener;
+  capTimer = window.setTimeout(() => finishCapture("timeout"), 8000);
   logDebug("program button listening", true);
 }
 
 export function cancelProgramming(): void {
-  finishProgramming("cancelled", []);
+  finishCapture("cancelled");
 }
 
-function noteProgramming(controller: number, actions: number[]): void {
-  if (programController !== null && controller !== programController) return;
-  if (!actions.length) {
-    if (gestureDown && peak.length > 0) finishProgramming("captured", peak);
-    gestureDown = false;
+function feedCapture(names: Set<string>): void {
+  if (capPhase === "wait_release") {
+    if (names.size === 0) capPhase = "listen";
     return;
   }
-  programController = controller;
-  gestureDown = true;
-  if (actions.length >= peak.length) peak = actions.slice();
-  if (settleTimer !== null) window.clearTimeout(settleTimer);
-  const snapshot = actions.slice();
-  settleTimer = window.setTimeout(() => {
-    settleTimer = null;
-    if (programming) finishProgramming("captured", snapshot);
-  }, 500);
+  if (capPhase !== "listen") return;
+  if (names.size > 0) {
+    if (capFirst === null) capFirst = Date.now();
+    for (const name of names) {
+      if (!capButtons.includes(name)) capButtons.push(name);
+    }
+    capButtons = orderButtons(capButtons);
+    if (capFirst !== null && Date.now() - capFirst >= 2000) finishCapture("captured");
+    return;
+  }
+  if (capFirst !== null && capButtons.length > 0) finishCapture("captured");
 }
 
 function suppressMenuIfNeeded(): void {
-  if (qamSuppressed || !binding.includes(STEAM_ACTION)) return;
+  if (qamSuppressed || !binding.includes("Steam")) return;
   try {
     Router.DisableHomeAndQuickAccessButtons();
     qamSuppressed = true;
@@ -191,67 +218,38 @@ function releaseMenu(): void {
 }
 
 async function fire(): Promise<void> {
+  if (hidrawActive) return;
   const now = Date.now();
   if (now - lastFire < 400) return;
   lastFire = now;
-  logDebug(`fire actions=${binding.join(",")} label=${bindingLabel(binding)}`, true);
+  logDebug(`fire buttons=${binding.join("+")} label=${bindingLabel(binding)}`, true);
   try {
-    const result = await togglePlayback();
+    const result = await shortcutToggle();
     logDebug(`fire result ${JSON.stringify(result)}`, true);
   } catch (error) {
     logDebug(`fire threw ${error instanceof Error ? error.message : String(error)}`, true);
   }
 }
 
-function clearCombo(): void {
-  comboArmed = false;
-  comboFired = false;
-  comboController = null;
-  if (holdTimer !== null) {
-    window.clearTimeout(holdTimer);
-    holdTimer = null;
-  }
-  releaseMenu();
-}
-
-function handleHeld(controller: number, current: number[], risingActions: number[]): void {
-  if (programming) {
-    noteProgramming(controller, current);
-    return;
-  }
-  if (binding.length === 0) return;
-  if (binding.length === 1) {
-    if (risingActions.includes(binding[0])) void fire();
-    return;
-  }
-  const pressed = new Set(current);
-  const complete = binding.every((code) => pressed.has(code));
-  if (!complete) {
-    if (comboController === controller) clearCombo();
-    return;
-  }
-  if (comboController !== null && comboController !== controller) return;
-  comboController = controller;
-  if (comboArmed) return;
-  comboArmed = true;
-  if (holdTimer !== null) window.clearTimeout(holdTimer);
-  holdTimer = window.setTimeout(() => {
-    holdTimer = null;
-    if (comboController !== controller || !comboArmed || comboFired) return;
-    const still = held.get(controller);
-    if (!still || !binding.every((code) => still.has(code))) return;
-    comboFired = true;
+function handleHeld(controller: number, names: Set<string>): void {
+  const prev = prevNames.get(controller) ?? new Set<string>();
+  prevNames.set(controller, names);
+  if (binding.length === 0 || hidrawActive) return;
+  const was = binding.every((name) => prev.has(name));
+  const down = binding.every((name) => names.has(name));
+  if (down && !was) {
     suppressMenuIfNeeded();
     void fire();
-  }, 250);
+  }
+  if (!names.has("Steam")) releaseMenu();
 }
 
 function applyEvent(controller: number, action: number, pressed: boolean): void {
   if (!Number.isInteger(controller) || !Number.isInteger(action)) return;
-  const line = `controller callback controller=${controller} action=${action} pressed=${pressed} name=${actionName(action)}`;
-  // Analog directions and touches can stream. Button press/release pairs are
-  // about 100 ms apart, so those lines are not throttled.
-  logDebug(line, !IGNORED_ACTIONS.has(action));
+  logDebug(
+    `controller callback controller=${controller} action=${action} pressed=${pressed} name=${actionName(action)}`,
+    !IGNORED_ACTIONS.has(action),
+  );
   if (IGNORED_ACTIONS.has(action)) return;
   let set = held.get(controller);
   if (!set) {
@@ -260,7 +258,15 @@ function applyEvent(controller: number, action: number, pressed: boolean): void 
   }
   if (pressed) set.add(action);
   else set.delete(action);
-  handleHeld(controller, [...set], pressed ? [action] : []);
+  if (capPhase === "wait_release" || capPhase === "listen") {
+    const union = new Set<string>();
+    for (const actions of held.values()) {
+      for (const name of namesFrom(actions)) union.add(name);
+    }
+    feedCapture(union);
+    return;
+  }
+  handleHeld(controller, namesFrom(set));
 }
 
 function onInputMessage(...args: unknown[]): void {
@@ -295,7 +301,19 @@ function steamInput(): SteamInput | undefined {
   return (globalThis as { SteamClient?: { Input?: SteamInput } }).SteamClient?.Input;
 }
 
+function refreshHidraw(): void {
+  void hidrawStatus()
+    .then((status) => {
+      hidrawActive = Boolean(status.active);
+    })
+    .catch(() => undefined);
+}
+
 export function startControllerShortcut(): void {
+  if (hidrawTimer === null) {
+    refreshHidraw();
+    hidrawTimer = window.setInterval(refreshHidraw, 2000);
+  }
   if (unregister || retryTimer !== null) return;
   const input = steamInput();
   const messages = input?.RegisterForControllerInputMessages;
@@ -347,13 +365,18 @@ function onLegacyState(value: unknown): void {
     }
     logDebug(`controller legacy callback ulButtons=${String(change.ulButtons)} ulUpperButtons=${String(change.ulUpperButtons)} actions=${actions.join(",") || "none"}`);
   }
-  const previous = held.get(-1) ?? new Set<number>();
-  const rising = actions.filter((code) => !previous.has(code));
   held.set(-1, new Set(actions));
-  handleHeld(-1, actions, rising);
+  const names = namesFrom(new Set(actions));
+  if (capPhase === "wait_release" || capPhase === "listen") {
+    feedCapture(names);
+    return;
+  }
+  handleHeld(-1, names);
 }
 
 export function stopControllerShortcut(): void {
+  if (hidrawTimer !== null) window.clearInterval(hidrawTimer);
+  hidrawTimer = null;
   if (retryTimer !== null) window.clearTimeout(retryTimer);
   retryTimer = null;
   try {
@@ -369,6 +392,6 @@ export function stopControllerShortcut(): void {
 
 export function replayRegistrationLog(): void {
   logDebug(registrationReport, true);
-  logDebug(`controller api=${activeApi}`, true);
-  logDebug(`shortcut config actions=${binding.join(",") || "none"} label=${bindingLabel(binding)}`, true);
+  logDebug(`controller api=${activeApi} hidraw=${hidrawActive}`, true);
+  logDebug(`shortcut config buttons=${binding.join("+") || "none"} label=${bindingLabel(binding)}`, true);
 }

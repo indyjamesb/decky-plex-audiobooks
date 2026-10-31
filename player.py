@@ -182,7 +182,7 @@ def build_ffplay_args(
     if filters:
         args.extend(["-af", ",".join(filters)])
     if url.startswith(("http://", "https://")):
-        args.extend(["-user_agent", "PlexAudiobooks/0.1.3"])
+        args.extend(["-user_agent", "PlexAudiobooks/0.1.4"])
         if headers:
             args.extend(["-headers", headers])
     args.append(url)

@@ -19,7 +19,8 @@ export interface Settings {
   speed: number;
   volume: number;
   book_sort: string;
-  play_pause_actions: number[];
+  play_pause_buttons: string[];
+  hidraw_active?: boolean;
   log_level: string;
 }
 
@@ -121,9 +122,22 @@ export const saveSettings = callable<
 export const testConnection = callable<[serverUrl: string, token: string], ConnectionResult>("test_connection");
 export const listBooks = callable<[query: string, start: number, sortId: string], BookListResult>("list_books");
 export const setBookSort = callable<[sortId: string], ActionResult & { book_sort?: string }>("set_book_sort");
-export const setPlayPauseButtons = callable<[buttons: number[]], ActionResult & { play_pause_actions?: number[] }>(
+export const setPlayPauseButtons = callable<[buttons: string[]], ActionResult & { play_pause_buttons?: string[] }>(
   "set_play_pause_buttons",
 );
+export const shortcutToggle = callable<[], ActionResult & { suppressed?: boolean }>("shortcut_toggle");
+export const hidrawStatus = callable<[], { success: boolean; active: boolean; nodes: string[] }>("hidraw_status");
+export const startShortcutCapture = callable<[], ShortcutCapture>("start_shortcut_capture");
+export const cancelShortcutCapture = callable<[], ActionResult>("cancel_shortcut_capture");
+export const shortcutCaptureState = callable<[], ShortcutCapture>("shortcut_capture_state");
+
+export interface ShortcutCapture extends ActionResult {
+  phase: string;
+  buttons: string[];
+  label?: string;
+  seconds_left: number | null;
+  hidraw?: boolean;
+}
 export const setLogLevel = callable<[level: string], ActionResult & { log_level?: string }>("set_log_level");
 export const getBook = callable<[albumKey: string], BookDetail>("get_book");
 export const playBook = callable<[albumKey: string, trackIndex: number, offsetMs: number], ActionResult>("play_book");

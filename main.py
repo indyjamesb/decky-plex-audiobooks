@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import sys
+import threading
 import time
 
 # The plugin directory is on sys.path when Decky loads this file. Inserting it
@@ -13,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import decky
 
+from deck_hid import DeckHidWatcher, migrate_shortcut, normalize_buttons
 from player import Player, PlayerError, build_child_env, find_ffplay, find_pulse_socket, set_process_volume
 from plex import PlexClient, PlexError, normalize_server_url
 from plex_auth import PlexAccount, public_server, sign_in_payload
@@ -22,7 +24,6 @@ from progress import (
     choose_resume,
     normalize_book_sort,
     normalize_log_level,
-    play_pause_actions,
     playback_outcome,
     previous_target,
     reported_position_ms,
@@ -32,7 +33,7 @@ from progress import (
     track_is_complete,
 )
 
-VERSION = "0.1.3"
+VERSION = "0.1.4"
 REPORT_INTERVAL_S = 15
 _PY_LOG_LEVELS = {
     "error": logging.ERROR,
@@ -56,7 +57,8 @@ DEFAULTS = {
     "speed": 1.0,
     "volume": 80,
     "book_sort": "recently_played",
-    "play_pause_actions": [],
+    "play_pause_buttons": ["R4"],
+    "play_pause_source": "hidraw",
     "log_level": "info",
 }
 
@@ -96,6 +98,10 @@ class Plugin:
         # Full server records, including access tokens. Never returned to the panel.
         self._server_cache: list[dict] = []
         self._frontend_log_times: list[float] = []
+        self._hid: DeckHidWatcher | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._shortcut_lock = threading.Lock()
+        self._last_shortcut_at = 0.0
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -117,10 +123,16 @@ class Plugin:
         env = build_child_env(dict(os.environ), find_pulse_socket())
         self.player = Player(find_ffplay(), os.path.join(log_dir, "ffplay.log"), env)
         self._tick_task = asyncio.create_task(self._tick_loop())
+        self._loop = asyncio.get_running_loop()
+        self._hid = DeckHidWatcher(on_fire=self._schedule_shortcut, log_debug=self._hid_debug)
+        self._hid.set_shortcut(list(self.settings.get("play_pause_buttons") or []))
+        self._hid.start()
         decky.logger.info("Plex Audiobooks %s loaded", VERSION)
 
     async def _unload(self):
         self._running = False
+        if self._hid is not None:
+            self._hid.stop()
         self._align_gen += 1
         if self._tick_task is not None:
             self._tick_task.cancel()
@@ -150,7 +162,8 @@ class Plugin:
                 if key in loaded:
                     merged[key] = loaded[key]
             merged["log_level"] = normalize_log_level(merged.get("log_level"))
-            merged["play_pause_actions"] = play_pause_actions(loaded)
+            merged["play_pause_buttons"] = migrate_shortcut(loaded)
+            merged["play_pause_source"] = "hidraw"
             self.settings = merged
         except Exception:
             # The file contains the token. Do not log the parse error or the body.
@@ -217,7 +230,8 @@ class Plugin:
             "speed": speed,
             "volume": int(self.settings.get("volume") if self.settings.get("volume") is not None else 80),
             "book_sort": normalize_book_sort(self.settings.get("book_sort")),
-            "play_pause_actions": play_pause_actions(self.settings),
+            "play_pause_buttons": list(self.settings.get("play_pause_buttons") or []),
+            "hidraw_active": bool(self._hid.active) if self._hid is not None else False,
             "log_level": normalize_log_level(self.settings.get("log_level")),
         }
 
@@ -253,12 +267,73 @@ class Plugin:
         decky.logger.log(_PY_LOG_LEVELS[name], "frontend: %s", text)
         return {"success": True, "logged": True}
 
+    def _hid_debug(self, message: str) -> None:
+        decky.logger.debug("%s", message)
+
+    def _schedule_shortcut(self) -> None:
+        loop = self._loop
+        if loop is None or not self._running:
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(self.shortcut_toggle("hidraw"), loop)
+        except RuntimeError:
+            decky.logger.debug("hidraw shortcut skipped; plugin loop is stopped")
+
+    def _claim_shortcut(self) -> bool:
+        now = time.monotonic()
+        with self._shortcut_lock:
+            if now - self._last_shortcut_at < 0.4:
+                return False
+            self._last_shortcut_at = now
+            return True
+
+    async def shortcut_toggle(self, source: str = "frontend"):
+        """Play/pause from a controller. Hidraw and the Steam UI share one debounce."""
+
+        if not self._claim_shortcut():
+            decky.logger.debug("shortcut suppressed source=%s", source)
+            return {"success": True, "suppressed": True}
+        result = await self.toggle_playback()
+        if result.get("success"):
+            decky.logger.info("Shortcut toggled playback (%s)", source)
+        else:
+            decky.logger.info("Shortcut toggle failed (%s): %s", source, result.get("message") or "failed")
+        return result
+
+    async def hidraw_status(self):
+        hid = self._hid
+        return {
+            "success": True,
+            "active": bool(hid.active) if hid is not None else False,
+            "nodes": list(hid.nodes) if hid is not None else [],
+        }
+
+    async def start_shortcut_capture(self):
+        hid = self._hid
+        if hid is None or not hid.active:
+            return {"success": False, "message": "Deck controller is not open yet."}
+        state = hid.start_capture()
+        return {"success": True, **state}
+
+    async def cancel_shortcut_capture(self):
+        if self._hid is not None:
+            self._hid.cancel_capture()
+        return {"success": True}
+
+    async def shortcut_capture_state(self):
+        if self._hid is None:
+            return {"success": True, "phase": "idle", "buttons": [], "label": "", "seconds_left": None, "hidraw": False}
+        return {"success": True, **self._hid.capture_state()}
+
     async def set_play_pause_buttons(self, buttons: list):
-        cleaned = play_pause_actions({"play_pause_actions": buttons if isinstance(buttons, list) else []})
-        self.settings["play_pause_actions"] = cleaned
+        cleaned = normalize_buttons(buttons if isinstance(buttons, list) else [])
+        self.settings["play_pause_buttons"] = cleaned
+        self.settings["play_pause_source"] = "hidraw"
+        if self._hid is not None:
+            self._hid.set_shortcut(cleaned)
         await self._save_settings()
-        decky.logger.info("Play/pause binding set to %s", "+".join(str(code) for code in cleaned) or "not set")
-        return {"success": True, "play_pause_actions": cleaned}
+        decky.logger.info("Play/pause binding set to %s", "+".join(cleaned) or "not set")
+        return {"success": True, "play_pause_buttons": cleaned}
 
     async def save_settings(self, server_url: str, token: str, library_key: str, library_title: str, track_progress):
         url = normalize_server_url(server_url)
