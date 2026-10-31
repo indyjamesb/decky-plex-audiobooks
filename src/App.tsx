@@ -1204,7 +1204,7 @@ function SettingsView({
           <PanelSectionRow>
             <TextField
               label="Plex URL"
-              description="Example: http://10.0.0.91:32400"
+              description="Example: http://192.168.1.50:32400"
               value={serverUrl}
               onChange={(event) => setServerUrl(event.target.value)}
             />

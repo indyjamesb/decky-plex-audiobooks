@@ -7,7 +7,7 @@ returns a short code the user types at https://plex.tv/link. Polling
 
 ``GET /api/v2/resources`` then lists the account's servers. Each server is
 shown once, using its local connection when one exists (for example
-``http://10.0.0.91:32400``) instead of a relay.
+``http://192.168.1.50:32400``) instead of a relay.
 
 Tokens travel only in the ``X-Plex-Token`` header. Do not log pin responses
 or resource payloads: both can contain an auth token.

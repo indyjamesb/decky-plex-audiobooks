@@ -27,7 +27,7 @@ _UNREACHABLE = (
 
 
 def normalize_server_url(url: str) -> str:
-    """Accept ``10.0.0.91:32400`` or a full http(s) URL. Drop a trailing slash."""
+    """Accept ``192.168.1.50:32400`` or a full http(s) URL. Drop a trailing slash."""
 
     cleaned = (url or "").strip().rstrip("/")
     if not cleaned:

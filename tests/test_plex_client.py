@@ -156,8 +156,8 @@ class PlexClientTests(unittest.TestCase):
         self.client = PlexClient(self.url, TOKEN, "client-1", timeout=3)
 
     def test_normalize_url(self):
-        self.assertEqual(normalize_server_url("10.0.0.91:32400"), "http://10.0.0.91:32400")
-        self.assertEqual(normalize_server_url("http://10.0.0.91:32400/"), "http://10.0.0.91:32400")
+        self.assertEqual(normalize_server_url("192.168.1.50:32400"), "http://192.168.1.50:32400")
+        self.assertEqual(normalize_server_url("http://192.168.1.50:32400/"), "http://192.168.1.50:32400")
 
     def test_identity_libraries_and_music_sections_only(self):
         identity = self.client.identity()

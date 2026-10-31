@@ -147,7 +147,7 @@ class FfplayLookupTests(unittest.TestCase):
 class ArgTests(unittest.TestCase):
     def test_stream_url_does_not_carry_the_token(self):
         token = "super-secret-token-value"
-        url = "http://10.0.0.91:32400/library/parts/5/6/file.m4b"
+        url = "http://192.168.1.50:32400/library/parts/5/6/file.m4b"
         headers = f"X-Plex-Token: {token}\r\n"
         args = build_ffplay_args("ffplay", url, headers, 125_000, 1.5, 40)
         self.assertNotIn(token, url)

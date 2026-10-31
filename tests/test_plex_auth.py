@@ -58,7 +58,7 @@ RESOURCES = [
             _connection("https://203.0.113.8:32400", False, False, "https"),
             _connection("https://10-0-0-91.abcdef.plex.direct:32400", True, False, "https"),
             _connection("https://relay.plex.direct:443", False, True, "https"),
-            _connection("http://10.0.0.91:32400", True, False, "http"),
+            _connection("http://192.168.1.50:32400", True, False, "http"),
         ],
     },
 ]
@@ -128,20 +128,20 @@ class Handler(BaseHTTPRequestHandler):
 class ConnectionTests(unittest.TestCase):
     def test_local_lan_address_beats_plex_direct_and_relay(self):
         chosen = choose_connection(RESOURCES[1]["connections"])
-        self.assertEqual(chosen["uri"], "http://10.0.0.91:32400")
+        self.assertEqual(chosen["uri"], "http://192.168.1.50:32400")
 
     def test_private_http_wins_when_the_local_flag_is_missing(self):
         connections = [
             _connection("https://relay.example:443", False, True, "https"),
-            _connection("http://10.0.0.91:32400", False, False, "http"),
+            _connection("http://192.168.1.50:32400", False, False, "http"),
         ]
-        self.assertEqual(choose_connection(connections)["uri"], "http://10.0.0.91:32400")
+        self.assertEqual(choose_connection(connections)["uri"], "http://192.168.1.50:32400")
 
     def test_public_payload_drops_tokens(self):
         account = {
             "client_identifier": "machine-study",
             "name": "Study",
-            "uri": "http://10.0.0.91:32400",
+            "uri": "http://192.168.1.50:32400",
             "local": True,
             "access_token": SERVER_TOKEN,
         }
@@ -150,7 +150,7 @@ class ConnectionTests(unittest.TestCase):
         self.assertNotIn(SERVER_TOKEN, encoded)
         self.assertNotIn("access_token", encoded)
         self.assertNotIn("authToken", encoded)
-        self.assertEqual(payload["servers"][0]["uri"], "http://10.0.0.91:32400")
+        self.assertEqual(payload["servers"][0]["uri"], "http://192.168.1.50:32400")
         self.assertEqual(public_server(account)["name"], "Study")
 
     def test_expired_pin_and_claimed_pin(self):
@@ -198,7 +198,7 @@ class PlexTvFlowTests(unittest.TestCase):
         self.assertEqual(self.account.username(ACCOUNT_TOKEN), "reader")
         servers = self.account.list_servers(ACCOUNT_TOKEN)
         self.assertEqual(len(servers), 1)
-        self.assertEqual(servers[0]["uri"], "http://10.0.0.91:32400")
+        self.assertEqual(servers[0]["uri"], "http://192.168.1.50:32400")
         self.assertTrue(servers[0]["local"])
         self.assertEqual(servers[0]["access_token"], SERVER_TOKEN)
         shown = json.dumps(sign_in_payload(signed_in=True, servers=servers))

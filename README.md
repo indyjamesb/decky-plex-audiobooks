@@ -2,6 +2,8 @@
 
 A Decky Loader plugin for Steam Deck (SteamOS 3.9.x, Game Mode). It plays audiobooks from your own Plex Media Server while a game is running, and saves the listening position to Plex so any Plex client can resume it. Tested on Steam Deck OLED.
 
+This plugin was built with AI coding assistance, and directed and tested on a Steam Deck OLED by the maintainer.
+
 Version 0.1 is a small player. One server, one library, browse and search, background playback, and resume sync.
 
 ## Changelog
@@ -42,35 +44,46 @@ The shortcut used `RegisterForControllerInputMessages` after `RegisterForControl
 
 ## Install on the Deck
 
-Build the zip on a computer (or on the Deck, if Node is installed), then copy it over. Decky does not need its plugin store for this.
+This plugin is not in the Decky plugin store. It is unofficial and is not affiliated with Plex.
 
-1. Install [Decky Loader](https://decky.xyz/) if it is not already installed.
-2. Copy `release/plex-audiobooks-v0.5.2.zip` to the Deck. The zip in this repository is already built.
-3. In Desktop Mode, or over SSH:
+You need [Decky Loader](https://decky.xyz/), a Plex server with a Music library of audiobooks, and `ffplay`. SteamOS ships `ffplay` with ffmpeg (`/usr/bin/ffplay`). If a playback error says ffplay is missing, install ffmpeg from Desktop Mode and try again.
 
-```bash
-mkdir -p ~/homebrew/plugins
-cd ~/homebrew/plugins
-unzip -o /path/to/plex-audiobooks-v0.5.2.zip
-```
+Download `plex-audiobooks-v0.5.2.zip` from the [latest release](https://github.com/indyjamesb/decky-plex-audiobooks/releases/latest).
 
-The zip already contains a `plex-audiobooks` folder. You should end up with:
+1. Open the Quick Access menu (the `...` button) and open Decky. The title bar says **Decky**. Press the gear (its description is **Open Decky Settings**).
+2. Open **General**. Under **Other**, turn on **Developer mode**. A **Developer** page then appears in the settings sidebar.
+3. Open **Developer**. Under **Third-Party Plugins**, find **Install Plugin from ZIP File** and press **Browse**.
+4. The first time, Decky shows **Third-Party Plugin Installation** and makes you wait 5 seconds before **Continue**. That dialog says the Decky Loader team has not reviewed the plugin. **Browse** then opens a zip file picker in your home directory.
+
+Decky extracts the zip into `~/homebrew/plugins`. The archive has one top-level folder, `plex-audiobooks/`, and `plugin.json` sits directly inside it. You should end up with:
 
 ```text
-~/homebrew/plugins/plex-audiobooks/dist/index.js
-~/homebrew/plugins/plex-audiobooks/main.py
 ~/homebrew/plugins/plex-audiobooks/plugin.json
+~/homebrew/plugins/plex-audiobooks/main.py
+~/homebrew/plugins/plex-audiobooks/dist/index.js
 ```
 
-4. Restart Decky:
+Open the Quick Access menu and choose **Plex Audiobooks**.
+
+### Update
+
+Install the newer zip the same way. Decky extracts it over `~/homebrew/plugins/plex-audiobooks` and loads the plugin again. Saved settings stay in `~/homebrew/settings/plex-audiobooks/`.
+
+### Uninstall
+
+In Decky settings, open **Plugins**. On the Plex Audiobooks row, open the `...` menu (**Plugin Actions**) and choose **Uninstall**. Confirm **Uninstall Plex Audiobooks**. That removes the plugin folder. The settings file, which holds the Plex token, stays at `~/homebrew/settings/plex-audiobooks/settings.json`. Delete that file if you want the token gone.
+
+### Manual install
+
+Over SSH, you can unpack the zip yourself:
 
 ```bash
+sudo mkdir -p ~/homebrew/plugins
+sudo unzip -o /path/to/plex-audiobooks-v0.5.2.zip -d ~/homebrew/plugins
 sudo systemctl restart plugin_loader
 ```
 
-You can also restart it from Decky's settings menu if that control is present. Then open the Quick Access Menu (the `...` button) and choose **Plex Audiobooks**.
-
-`ffplay` comes with SteamOS's ffmpeg (`/usr/bin/ffplay`). If a playback error says ffplay is missing, install ffmpeg from Desktop Mode and try again.
+The zip already contains a `plex-audiobooks` folder, so the files land in `~/homebrew/plugins/plex-audiobooks/`.
 
 ## Build
 
@@ -92,7 +105,7 @@ Audiobooks in Plex are a **Music** library. There is no separate audiobook libra
 
 ### Sign in
 
-In the plugin, choose **Sign in with Plex**. It asks plex.tv for a short code (`POST /api/v2/pins` with `strong=false`). On a phone or computer, open [plex.tv/link](https://plex.tv/link) and enter that code. The plugin polls the pin until Plex sets an auth token, then lists your servers from plex.tv's resource list. Pick one. When a server has a local connection, that address is used (for example `http://10.0.0.91:32400`) instead of a relay. Then pick the Music library and save.
+In the plugin, choose **Sign in with Plex**. It asks plex.tv for a short code (`POST /api/v2/pins` with `strong=false`). On a phone or computer, open [plex.tv/link](https://plex.tv/link) and enter that code. The plugin polls the pin until Plex sets an auth token, then lists your servers from plex.tv's resource list. Pick one. When a server has a local connection, that address is used (for example `http://192.168.1.50:32400`) instead of a relay. Then pick the Music library and save.
 
 **Sign out** clears the saved account, server, and library from this Deck and stops playback.
 
@@ -102,7 +115,7 @@ The plugin identifies itself to Plex as **Plex Audiobooks**, with one `X-Plex-Cl
 
 ### Advanced: URL and token
 
-**Advanced: URL and token** is the fallback when link sign-in is not usable. Enter a server URL such as `http://10.0.0.91:32400` (`10.0.0.91:32400` is accepted and treated as `http://`) and a Plex token. In the Plex web app, play any item, open the browser's network panel, and copy `X-Plex-Token`. Plex's own article is [Finding an authentication token](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/). Leave the token field blank later to keep the one already saved.
+**Advanced: URL and token** is the fallback when link sign-in is not usable. Enter a server URL such as `http://192.168.1.50:32400` (`192.168.1.50:32400` is accepted and treated as `http://`) and a Plex token. In the Plex web app, play any item, open the browser's network panel, and copy `X-Plex-Token`. Plex's own article is [Finding an authentication token](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/). Leave the token field blank later to keep the one already saved.
 
 Test the connection, choose the Music library that holds the books, and press **Use this library**. The list is a picker, not a switch. The library list is only Music sections.
 
@@ -130,7 +143,7 @@ With **Store track progress** on, this plugin writes your place in each chapter 
 - **Play/pause button** defaults to R4, including while a game is focused. The backend reads the Deck controller at `/dev/hidraw` (USB `28DE:1205`) and toggles playback itself, so it still works after the Quick Access Menu closes. One button fires on press. A combo fires when those buttons are held together. Repeats inside 400 ms are ignored. **Clear** turns it off. **Program button** waits until every button is up, then records the next press (release, or about 2 seconds from the first press). The A press that opens Program is not saved. The panel shows the result, for example `R4` or `L4 + R4`, and **Cancel** aborts. Leave a back button unbound in that game’s Steam Input layout; a combo can still reach the game. Touch bits are ignored.
 - L4 (byte 13 bit `0x02`) and R4 (byte 13 bit `0x04`) were captured in a game. Other names follow Linux `drivers/hid/hid-steam.c` (`steam_do_deck_input_event`) and SDL `SDL_hidapi_steamdeck.c` (`SteamDeckButtons`). Those other names were not pressed in that capture. Set **Log level** to Debug. Lines look like `hidraw nodes hidraw2`, `hidraw input hidraw2`, `hidraw buttons R4`, and `hidraw shortcut fire R4`. Each toggle also writes one Info line: `Shortcut toggled playback (hidraw)`.
 - `SteamClient.Input.RegisterForControllerInputMessages` is still registered for the Steam UI. It does not toggle while the hidraw reader is open, so one press is not applied twice. On the Steam client from Oct 31 2026 that callback does not run in a game.
-- **Log level** is a menu in settings (Error, Warning, Info, Debug), saved, default Info. Controller diagnostics are Debug only. For a shortcut test, set Log level to Debug. Lines are written to `~/homebrew/logs/plex-audiobooks/plugin.log` with a `frontend:` prefix. Use Debug only when testing.
+- **Log level** is a menu in settings. See [Logs](#logs). Controller diagnostics are Debug only. For a shortcut test, set Log level to Debug.
 
 ### Progress sync
 
@@ -140,13 +153,24 @@ While a file is playing, the plugin tells Plex with `GET /:/timeline` about ever
 
 Choosing a chapter, pressing Next or Previous, or skipping backward also rewrites nearby Plex progress: earlier unfinished files are marked played, and later saved offsets are cleared, so the file you are on is the resume point. That can mark files played that you did not listen through. Pause and the 15-second updates only move the current file's offset.
 
+## Logs
+
+**Log level** is a menu in the plugin settings: Error, Warning, Info, or Debug. The choice is saved. The default is Info.
+
+Each time the plugin loads, Decky starts a new file named with the time, `~/homebrew/logs/plex-audiobooks/YYYY-MM-DD HH.MM.SS.log`. It keeps the 5 newest `.log` files and deletes the older ones. A single file is not size-capped, so leave Debug on only while you are testing. Lines from the panel are prefixed `frontend:`.
+
+- **Error** records real failures: ffplay missing or crashing, audio not ready, Plex unreachable, a book failing to load or list, sign-in failing, and settings failing to read or save.
+- **Warning** also records problems that do not stop playback: a progress report or scrobble that failed, a game-volume change or restore that failed, and `pactl` failures.
+- **Info** also records ordinary activity: load and unload, what is playing, shortcut presses, server switches, sign-in and sign-out, and setting changes.
+- **Debug** also records connection attempts, local checks, and controller diagnostics.
+
 ## What was tested here
 
 This environment has no Steam Deck and no Plex server. These checks were run:
 
 - Progress math: multi-file and single-file resume, ±30s across files, previous-chapter behavior, speed filter strings, the inflated timeline duration, and the "immediate ffplay exit is a failure" rule.
 - Plex HTTP client against a local stand-in server: library filtering, book and chapter parsing, `viewOffset`, timeline query shape (`playbackTime` is the offset, not a clock), scrobble key, cover fetch, 401, and an unreachable server. The token stayed in the header and out of URLs and error text.
-- Plex account client against a local stand-in for plex.tv: PIN creation with `strong=false`, polling until `authToken` is set, account name, and resource discovery that picks `http://10.0.0.91:32400` over a plex.direct address and a relay. Tokens stayed out of the panel payload and out of request URLs.
+- Plex account client against a local stand-in for plex.tv: PIN creation with `strong=false`, polling until `authToken` is set, account name, and resource discovery that picks `http://192.168.1.50:32400` over a plex.direct address and a relay. Tokens stayed out of the panel payload and out of request URLs.
 - `ffplay` itself, using a generated tone and a dummy audio driver: the process stays up, pause holds the estimated position, and a mid-file seek at 2× starts past that seek point. PipeWire on a Deck was not involved.
 
 `pnpm run build` produces the frontend bundle the zip is built from. The Quick Access Menu was not opened, because that UI only exists inside the Steam client.

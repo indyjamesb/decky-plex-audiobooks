@@ -12,7 +12,7 @@ from plex_auth import (
 )
 
 
-LOCAL = {"uri": "http://10.0.0.91:32400", "local": True, "relay": False, "protocol": "http"}
+LOCAL = {"uri": "http://192.168.1.50:32400", "local": True, "relay": False, "protocol": "http"}
 REMOTE = {"uri": "https://1-2-3-4.aabbccdd.plex.direct:32400", "local": False, "relay": False, "protocol": "https"}
 RELAY = {"uri": "https://relay.example:443", "local": False, "relay": True, "protocol": "https"}
 SAVED = [RELAY, REMOTE, LOCAL]
@@ -81,7 +81,7 @@ class FailoverTests(unittest.TestCase):
 
     def test_everything_failed_is_a_plain_message(self):
         def operation(_uri):
-            raise PlexError("timed out: http://10.0.0.91:32400 X-Plex-Token=secret", unreachable=True)
+            raise PlexError("timed out: http://192.168.1.50:32400 X-Plex-Token=secret", unreachable=True)
 
         with self.assertRaises(PlexError) as caught:
             run_failover(SAVED, LOCAL["uri"], operation, lambda: [])
