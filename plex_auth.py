@@ -101,36 +101,115 @@ def device_name(hostname: str | None = None) -> str:
     return text or "steamdeck"
 
 
-def platform_version() -> str:
+def _dmi_text(path: str) -> str | None:
     try:
-        with open("/etc/os-release", "r", encoding="utf-8") as handle:
-            for line in handle:
-                if line.startswith("VERSION_ID="):
-                    value = line.split("=", 1)[1].strip().strip('"').strip("'")
-                    if value:
-                        return value
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            return handle.read().strip()
     except OSError:
-        pass
-    return "SteamOS"
+        return None
 
 
-def client_headers(client_id: str, token: str = "", *, name: str | None = None) -> dict[str, str]:
+def handheld_model(dmi_root: str = "/sys/class/dmi/id") -> str:
+    """Friendly handheld name from DMI.
+
+    Valve Galileo was read on the tested Steam Deck OLED. Jupiter (LCD) and
+    the other names are published DMI product strings and were not checked
+    on those devices. Unreadable DMI becomes ``Linux Handheld``.
+    """
+
+    vendor = _dmi_text(os.path.join(dmi_root, "sys_vendor"))
+    product = _dmi_text(os.path.join(dmi_root, "product_name"))
+    family = _dmi_text(os.path.join(dmi_root, "product_family"))
+    board = _dmi_text(os.path.join(dmi_root, "board_name"))
+    if vendor is None and product is None and family is None and board is None:
+        return "Linux Handheld"
+    return map_handheld(vendor or "", product or "", family or "", board or "")
+
+
+def map_handheld(vendor: str, product: str, family: str, board: str) -> str:
+    """Map DMI strings to a short device name. ``board`` fills in a blank product name."""
+
+    product_or_board = (product or board).strip()
+    vendor = vendor.strip()
+    family = family.strip()
+    haystack = " ".join((vendor, product, family, board)).lower()
+    family_l = family.lower()
+    named = product_or_board.lower()
+    # Device-verified: the user's Steam Deck OLED reports Galileo.
+    if "galileo" in haystack:
+        return "Steam Deck OLED"
+    # Published name for the LCD Deck. Not checked on hardware.
+    if "jupiter" in haystack:
+        return "Steam Deck"
+    if "legion go s" in family_l or "legion go s" in named:
+        return "Legion Go S"
+    if "legion go" in family_l or "legion go" in named:
+        return "Legion Go"
+    if "rc72la" in haystack:
+        return "ROG Ally X"
+    if "rc71l" in haystack:
+        return "ROG Ally"
+    if "claw" in haystack:
+        return "MSI Claw"
+    generic = " ".join(part for part in (vendor, product_or_board) if part)
+    generic = " ".join(generic.split())
+    return generic or "Linux Handheld"
+
+
+def plex_product(model: str | None = None) -> str:
+    """Product header. Store copy stays 'for Steam Deck'; this follows the device."""
+
+    return f"Plex Audiobooks for {model or handheld_model()}"
+
+
+def platform_info(os_release: str = "/etc/os-release") -> tuple[str, str]:
+    """``NAME`` and ``VERSION_ID`` from os-release, for example SteamOS or Bazzite."""
+
+    name = ""
+    version = ""
+    try:
+        with open(os_release, "r", encoding="utf-8", errors="replace") as handle:
+            text = handle.read()
+    except OSError:
+        return ("Linux", "")
+    for line in text.splitlines():
+        if line.startswith("NAME="):
+            name = line.split("=", 1)[1].strip().strip('"').strip("'")
+        elif line.startswith("VERSION_ID="):
+            version = line.split("=", 1)[1].strip().strip('"').strip("'")
+    return (name or "Linux", version)
+
+
+def platform_version() -> str:
+    return platform_info()[1] or "SteamOS"
+
+
+def client_headers(
+    client_id: str,
+    token: str = "",
+    *,
+    name: str | None = None,
+    model: str | None = None,
+    platform: tuple[str, str] | None = None,
+) -> dict[str, str]:
     """Headers that identify this install to Plex. Token is optional and never logged here.
 
     Sent on plex.tv and on the media server so Dashboard Now Playing and the
-    device list show this player.
+    device list show this player. ``X-Plex-Device-Name`` is the hostname.
     """
 
+    chosen = model or handheld_model()
+    plat_name, plat_version = platform if platform is not None else platform_info()
     headers = {
         "Accept": "application/json",
-        "X-Plex-Product": PRODUCT_NAME,
+        "X-Plex-Product": plex_product(chosen),
         "X-Plex-Version": PRODUCT_VERSION,
         "X-Plex-Client-Identifier": client_id or "plex-audiobooks",
-        "X-Plex-Platform": "SteamOS",
-        "X-Plex-Platform-Version": platform_version(),
-        "X-Plex-Device": "Steam Deck",
+        "X-Plex-Platform": plat_name or "Linux",
+        "X-Plex-Platform-Version": plat_version,
+        "X-Plex-Device": chosen,
         "X-Plex-Device-Name": device_name(name),
-        "X-Plex-Model": "Steam Deck",
+        "X-Plex-Model": chosen,
         "X-Plex-Provides": "player",
         "User-Agent": f"PlexAudiobooks/{PRODUCT_VERSION}",
     }
@@ -507,7 +586,7 @@ class PlexAccount:
 
         body = urllib.parse.urlencode({
             "strong": "false",
-            "X-Plex-Product": PRODUCT_NAME,
+            "X-Plex-Product": plex_product(),
             "X-Plex-Client-Identifier": self.client_id,
         }).encode("utf-8")
         payload = self._json("/api/v2/pins", method="POST", data=body)

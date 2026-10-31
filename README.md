@@ -1,6 +1,6 @@
 # Plex Audiobooks
 
-A Decky Loader plugin for Steam Deck (SteamOS 3.9.x, Game Mode). It plays audiobooks from your own Plex Media Server while a game is running, and saves the listening position to Plex so any Plex client can resume it.
+A Decky Loader plugin for Steam Deck (SteamOS 3.9.x, Game Mode). It plays audiobooks from your own Plex Media Server while a game is running, and saves the listening position to Plex so any Plex client can resume it. Tested on Steam Deck OLED.
 
 Version 0.1 is a small player. One server, one library, browse and search, background playback, and resume sync.
 
@@ -8,11 +8,13 @@ Version 0.1 is a small player. One server, one library, browse and search, backg
 
 ### 0.1.5
 
-Play/pause still defaults to R4, and that name now means the Deck R4 or the Steam Controller right back button. Hidraw also reads an Xbox Wireless Controller over Bluetooth, a DualSense over Bluetooth, and a Switch Pro Controller over USB. A book page shows Resume and Chapters. The plugin keeps every Plex connection for the chosen server and fails over from local to remote to relay without asking. Requests to plex.tv and the media server identify this player (product, version, a client id saved once, Steam Deck device fields) and report `GET /:/timeline` about every 10 seconds and on play, pause, seek, and stop. That session display has not been checked against a real Plex server yet.
+Tested on Steam Deck OLED. Play/pause still defaults to R4, and that name now means the Deck R4 or the Steam Controller right back button. Hidraw also reads an Xbox Wireless Controller over Bluetooth, a DualSense over Bluetooth, and a Switch Pro Controller over USB. A book page shows Resume and Chapters. The plugin keeps every Plex connection for the chosen server and fails over from local to remote to relay without asking. Requests to plex.tv and the media server identify this player from DMI (product "Plex Audiobooks for <device>", version, a client id saved once) and report `GET /:/timeline` about every 10 seconds and on play, pause, seek, and stop. That session display has not been checked against a real Plex server yet.
 
-Device-verified on Oct 31 2026: Deck L4/R4, Steam Controller back buttons (28DE:1304 report 0x42), Xbox Wireless Controller Bluetooth (045E:0B13), DualSense Bluetooth (054C:0CE6 report 0x31), Switch Pro Controller USB (057E:2009 report 0x30).
+The store listing stays "for Steam Deck". On the device, `X-Plex-Device` and `X-Plex-Model` follow DMI. Valve Galileo maps to "Steam Deck OLED"; that mapping is device-verified. Valve Jupiter ("Steam Deck" LCD), Legion Go, Legion Go S, ROG Ally, ROG Ally X, and MSI Claw are published DMI names and were not checked on those devices. If DMI cannot be read, the name is "Linux Handheld".
 
-Not captured, so untested: DualSense USB (report 0x01, buttons one byte earlier), Switch Pro Controller over Bluetooth (same 0x30 report), the generic evdev gamepad path, and any Steam Controller button other than the two back buttons. Dashboard Now Playing for this player is also untested until it is tried on a real server.
+Device-verified on a Steam Deck OLED, Oct 31 2026: Deck L4/R4, Steam Controller back buttons (28DE:1304 report 0x42), Xbox Wireless Controller Bluetooth (045E:0B13), DualSense Bluetooth (054C:0CE6 report 0x31), Switch Pro Controller USB (057E:2009 report 0x30).
+
+Not captured, so untested: DualSense USB (report 0x01, buttons one byte earlier), Switch Pro Controller over Bluetooth (same 0x30 report), the generic evdev gamepad path, and any Steam Controller button other than the two back buttons. The LCD Deck (Jupiter) DMI mapping and the other handheld names are untested. Dashboard Now Playing for this player is also untested until it is tried on a real server.
 
 ### 0.1.4
 
@@ -131,7 +133,7 @@ This environment has no Steam Deck and no Plex server. These checks were run:
 
 ## Not tested
 
-Sign-in and playback were confirmed on a Steam Deck outside this environment. The items below were not verified here.
+Sign-in and playback were confirmed on a Steam Deck OLED outside this environment. The items below were not verified here.
 
 - Game Mode: audio continuing under a focused game, mixing with game audio, and the Quick Access Menu opening and closing during playback.
 - The Deck's PipeWire socket (`/run/user/<uid>/pulse/native`) and Decky's bundled `LD_LIBRARY_PATH`, which is why ffplay is launched with a cleaned environment. That failure mode is real on Decky (Museck issues around ffplay dying instantly) but was not reproduced here.

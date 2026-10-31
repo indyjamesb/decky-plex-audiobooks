@@ -17,7 +17,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from plex_auth import PRODUCT_NAME, PRODUCT_VERSION, PlexError, _reason, client_headers, ssl_context
+from plex_auth import PlexError, _reason, client_headers, ssl_context
 from progress import AudioTrack, PLEX_SORT, normalize_book_sort, timeline_duration_ms
 
 _IDENTIFIER = "com.plexapp.plugins.library"

@@ -1,17 +1,22 @@
 import json
+import os
+import tempfile
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from plex_auth import (
-    PRODUCT_NAME,
     PRODUCT_VERSION,
     PlexAccount,
     PlexError,
     choose_connection,
     client_headers,
     device_name,
+    handheld_model,
+    map_handheld,
     parse_pin,
+    platform_info,
+    plex_product,
     public_server,
     redact_secrets,
     sign_in_payload,
@@ -183,7 +188,7 @@ class PlexTvFlowTests(unittest.TestCase):
         self.assertIn("strong=false", body)
         self.assertNotIn("strong=true", body)
         self.assertEqual(client_id, CLIENT_ID)
-        self.assertEqual(product, PRODUCT_NAME)
+        self.assertEqual(product, plex_product())
 
         self.assertEqual(self.account.check_pin(pin["id"], pin["code"])["state"], "pending")
         claimed = self.account.check_pin(pin["id"], pin["code"])
@@ -223,15 +228,21 @@ class PlexTvFlowTests(unittest.TestCase):
 class PlayerIdentityTests(unittest.TestCase):
     def test_headers_identify_the_player_and_keep_the_token_out_of_the_log_shape(self):
         client_id = "11111111-2222-3333-4444-555555555555"
-        headers = client_headers(client_id, token="session-token", name="steamdeck.local")
-        self.assertEqual(headers["X-Plex-Product"], "Plex Audiobooks for Steam Deck")
+        headers = client_headers(
+            client_id,
+            token="session-token",
+            name="steamdeck.local",
+            model="Steam Deck OLED",
+            platform=("SteamOS", "3.9"),
+        )
+        self.assertEqual(headers["X-Plex-Product"], "Plex Audiobooks for Steam Deck OLED")
         self.assertEqual(headers["X-Plex-Version"], PRODUCT_VERSION)
         self.assertEqual(headers["X-Plex-Client-Identifier"], client_id)
         self.assertEqual(headers["X-Plex-Platform"], "SteamOS")
-        self.assertTrue(headers["X-Plex-Platform-Version"])
-        self.assertEqual(headers["X-Plex-Device"], "Steam Deck")
+        self.assertEqual(headers["X-Plex-Platform-Version"], "3.9")
+        self.assertEqual(headers["X-Plex-Device"], "Steam Deck OLED")
         self.assertEqual(headers["X-Plex-Device-Name"], "steamdeck")
-        self.assertEqual(headers["X-Plex-Model"], "Steam Deck")
+        self.assertEqual(headers["X-Plex-Model"], "Steam Deck OLED")
         self.assertEqual(headers["X-Plex-Provides"], "player")
         logged = redact_secrets(" ".join(f"{key}={value}" for key, value in headers.items()))
         self.assertNotIn("session-token", logged)
@@ -246,6 +257,45 @@ class PlayerIdentityTests(unittest.TestCase):
     def test_device_name_falls_back(self):
         self.assertEqual(device_name(""), "steamdeck")
         self.assertEqual(device_name("steamdeck.local"), "steamdeck")
+
+    def test_dmi_maps_known_handhelds(self):
+        # Galileo is the Steam Deck OLED that was actually tested.
+        self.assertEqual(map_handheld("Valve", "Galileo", "Galileo", ""), "Steam Deck OLED")
+        self.assertEqual(map_handheld("Valve", "Jupiter", "", ""), "Steam Deck")
+        self.assertEqual(map_handheld("LENOVO", "83E1", "Legion Go", ""), "Legion Go")
+        self.assertEqual(map_handheld("LENOVO", "Legion Go S", "", ""), "Legion Go S")
+        self.assertEqual(map_handheld("ASUSTeK", "RC71L", "ROG Ally", ""), "ROG Ally")
+        self.assertEqual(map_handheld("ASUSTeK", "RC72LA", "", ""), "ROG Ally X")
+        self.assertEqual(map_handheld("Micro-Star", "Claw A1M", "", ""), "MSI Claw")
+        self.assertEqual(map_handheld("Framework", "Laptop 16", "", ""), "Framework Laptop 16")
+        self.assertEqual(map_handheld("Valve", "", "", "Jupiter"), "Steam Deck")
+        self.assertEqual(map_handheld("", "", "", ""), "Linux Handheld")
+
+    def test_dmi_files_and_missing_sysfs(self):
+        with tempfile.TemporaryDirectory() as root:
+            for filename, text in (
+                ("sys_vendor", "Valve\n"),
+                ("product_name", "Galileo\n"),
+                ("product_family", "Galileo\n"),
+                ("board_name", "Galileo\n"),
+            ):
+                with open(os.path.join(root, filename), "w", encoding="utf-8") as handle:
+                    handle.write(text)
+            self.assertEqual(handheld_model(root), "Steam Deck OLED")
+            self.assertEqual(plex_product(handheld_model(root)), "Plex Audiobooks for Steam Deck OLED")
+        self.assertEqual(handheld_model(os.path.join(root, "missing")), "Linux Handheld")
+
+    def test_platform_comes_from_os_release(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = os.path.join(root, "os-release")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write('NAME="Bazzite"\nVERSION_ID=41\n')
+            self.assertEqual(platform_info(path), ("Bazzite", "41"))
+            headers = client_headers("id", name="deck", model="Legion Go", platform=platform_info(path))
+            self.assertEqual(headers["X-Plex-Platform"], "Bazzite")
+            self.assertEqual(headers["X-Plex-Platform-Version"], "41")
+            self.assertEqual(headers["X-Plex-Product"], "Plex Audiobooks for Legion Go")
+            self.assertEqual(headers["X-Plex-Device-Name"], "deck")
 
 
 if __name__ == "__main__":
