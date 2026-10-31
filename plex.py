@@ -17,7 +17,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from plex_auth import PRODUCT_NAME, PRODUCT_VERSION, PlexError, client_headers
+from plex_auth import PRODUCT_NAME, PRODUCT_VERSION, PlexError, _reason, client_headers, ssl_context
 from progress import AudioTrack, timeline_duration_ms
 
 _IDENTIFIER = "com.plexapp.plugins.library"
@@ -160,7 +160,7 @@ class PlexClient:
         url = self.server_url + path
         request = urllib.request.Request(url, data=data, headers=self._headers(), method=method)
         try:
-            with urllib.request.urlopen(request, timeout=timeout or self.timeout) as response:
+            with urllib.request.urlopen(request, timeout=timeout or self.timeout, context=ssl_context()) as response:
                 return response.read()
         except urllib.error.HTTPError as err:
             if err.code == 401:
@@ -168,10 +168,10 @@ class PlexClient:
             if err.code == 404:
                 raise PlexError("Plex could not find that item.", status=404) from None
             raise PlexError(f"Plex returned HTTP {err.code}.", status=err.code) from None
-        except urllib.error.URLError:
-            raise PlexError(_UNREACHABLE, unreachable=True) from None
-        except (TimeoutError, OSError):
-            raise PlexError(_UNREACHABLE, unreachable=True) from None
+        except urllib.error.URLError as err:
+            raise PlexError(_UNREACHABLE + _reason(err), unreachable=True) from None
+        except (TimeoutError, OSError) as err:
+            raise PlexError(_UNREACHABLE + _reason(err), unreachable=True) from None
 
     def _get_json(self, path: str, timeout: float | None = None) -> tuple[dict | None, str]:
         raw = self._request(path, timeout=timeout)

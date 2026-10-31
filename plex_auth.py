@@ -16,6 +16,8 @@ or resource payloads: both can contain an auth token.
 from __future__ import annotations
 
 import json
+import os
+import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -27,6 +29,42 @@ PLEX_TV = "https://plex.tv"
 LINK_URL = "https://plex.tv/link"
 
 _UNREACHABLE = "Can't reach plex.tv to sign in. Check that this Deck has internet access."
+
+
+_CA_CANDIDATES = (
+    "/etc/ssl/cert.pem",
+    "/etc/ssl/certs/ca-certificates.crt",
+    "/etc/ca-certificates/extracted/tls-ca-bundle.pem",
+)
+_SSL_CONTEXT: ssl.SSLContext | None = None
+
+
+def ssl_context() -> ssl.SSLContext:
+    """Verified TLS context that also works inside Decky's bundled Python.
+
+    Decky Loader's frozen Python may not find SteamOS's CA bundle on its own,
+    which makes every HTTPS call fail certificate checks. Load the system
+    bundle explicitly (certificate verification stays on).
+    """
+
+    global _SSL_CONTEXT
+    if _SSL_CONTEXT is None:
+        context = ssl.create_default_context()
+        for path in _CA_CANDIDATES:
+            if os.path.isfile(path):
+                try:
+                    context.load_verify_locations(cafile=path)
+                    break
+                except (OSError, ssl.SSLError):
+                    continue
+        _SSL_CONTEXT = context
+    return _SSL_CONTEXT
+
+
+def _reason(err: BaseException) -> str:
+    reason = getattr(err, "reason", None) or err
+    text = str(reason).strip()
+    return f" ({text[:160]})" if text else ""
 
 
 class PlexError(Exception):
@@ -270,7 +308,7 @@ class PlexAccount:
             method=method,
         )
         try:
-            with urllib.request.urlopen(request, timeout=timeout or self.timeout) as response:
+            with urllib.request.urlopen(request, timeout=timeout or self.timeout, context=ssl_context()) as response:
                 return response.read()
         except urllib.error.HTTPError as err:
             if err.code == 401:
@@ -278,10 +316,10 @@ class PlexAccount:
             if err.code == 404:
                 raise PlexError("That sign-in code expired. Request a new one.", status=404) from None
             raise PlexError(f"plex.tv returned HTTP {err.code}.", status=err.code) from None
-        except urllib.error.URLError:
-            raise PlexError(_UNREACHABLE, unreachable=True) from None
-        except (TimeoutError, OSError):
-            raise PlexError(_UNREACHABLE, unreachable=True) from None
+        except urllib.error.URLError as err:
+            raise PlexError(_UNREACHABLE + _reason(err), unreachable=True) from None
+        except (TimeoutError, OSError) as err:
+            raise PlexError(_UNREACHABLE + _reason(err), unreachable=True) from None
 
     def _json(self, path: str, *, method: str = "GET", data: bytes | None = None, token: str = "") -> object:
         raw = self._request(path, method=method, data=data, token=token)
