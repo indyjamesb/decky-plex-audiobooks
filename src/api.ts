@@ -18,6 +18,9 @@ export interface Settings {
   track_progress: boolean | null;
   speed: number;
   volume: number;
+  game_volume: number;
+  auto_lower_game: boolean;
+  duck_level: number;
   book_sort: string;
   play_pause_buttons: string[];
   hidraw_active?: boolean;
@@ -107,6 +110,9 @@ export interface PlaybackStatus {
   book_duration_ms: number;
   speed: number;
   volume: number;
+  game_volume?: number;
+  auto_lower_game?: boolean;
+  duck_level?: number;
   last_error: string | null;
   album_key: string;
   configured: boolean;
@@ -148,6 +154,11 @@ export const nextChapter = callable<[], ActionResult>("next_chapter");
 export const previousChapter = callable<[], ActionResult>("previous_chapter");
 export const setSpeed = callable<[speed: number], ActionResult>("set_speed");
 export const setVolume = callable<[volume: number], ActionResult>("set_volume");
+export const setGameVolume = callable<[volume: number], ActionResult & { game_volume?: number }>("set_game_volume");
+export const setAutoLowerGame = callable<[enabled: boolean], ActionResult & { auto_lower_game?: boolean }>(
+  "set_auto_lower_game",
+);
+export const setDuckLevel = callable<[volume: number], ActionResult & { duck_level?: number }>("set_duck_level");
 export const getStatus = callable<[], PlaybackStatus>("get_status");
 export const startSignIn = callable<[], SignInResult>("start_sign_in");
 export const pollSignIn = callable<[], SignInResult>("poll_sign_in");

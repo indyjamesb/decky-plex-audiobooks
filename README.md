@@ -6,6 +6,10 @@ Version 0.1 is a small player. One server, one library, browse and search, backg
 
 ## Changelog
 
+### 0.1.6
+
+Tested on Steam Deck OLED. A Game volume slider sets other application streams, and the book can lower them while it plays. Pausing the book puts the game back. The book slider is labeled Book volume.
+
 ### 0.1.5
 
 Tested on Steam Deck OLED. Play/pause still defaults to R4, and that name now means the Deck R4 or the Steam Controller right back button. Hidraw also reads an Xbox Wireless Controller over Bluetooth, a DualSense over Bluetooth, and a Switch Pro Controller over USB. A book page shows Resume and Chapters. The plugin keeps every Plex connection for the chosen server and fails over from local to remote to relay without asking. Requests to plex.tv and the media server identify this player from DMI (product "Plex Audiobooks for <device>", version, a client id saved once) and report `GET /:/timeline` about every 10 seconds and on play, pause, seek, and stop. That session display has not been checked against a real Plex server yet.
@@ -29,13 +33,13 @@ The shortcut used `RegisterForControllerInputMessages` after `RegisterForControl
 Build the zip on a computer (or on the Deck, if Node is installed), then copy it over. Decky does not need its plugin store for this.
 
 1. Install [Decky Loader](https://decky.xyz/) if it is not already installed.
-2. Copy `release/plex-audiobooks-v0.1.5.zip` to the Deck. The zip in this repository is already built.
+2. Copy `release/plex-audiobooks-v0.1.6.zip` to the Deck. The zip in this repository is already built.
 3. In Desktop Mode, or over SSH:
 
 ```bash
 mkdir -p ~/homebrew/plugins
 cd ~/homebrew/plugins
-unzip -o /path/to/plex-audiobooks-v0.1.5.zip
+unzip -o /path/to/plex-audiobooks-v0.1.6.zip
 ```
 
 The zip already contains a `plex-audiobooks` folder. You should end up with:
@@ -66,9 +70,9 @@ pnpm test
 pnpm run package
 ```
 
-`pnpm test` runs the Python unit tests. `pnpm run package` writes `release/plex-audiobooks-v0.1.5.zip`.
+`pnpm test` runs the Python unit tests. `pnpm run package` writes `release/plex-audiobooks-v0.1.6.zip`.
 
-`pnpm run build` only produces `dist/index.js`. A manual install without the zip is the plugin directory containing `dist/`, `main.py`, `deck_hid.py`, `player.py`, `plex.py`, `plex_auth.py`, `progress.py`, `plugin.json`, `package.json`, `LICENSE`, `NOTICE`, and `README.md`.
+`pnpm run build` only produces `dist/index.js`. A manual install without the zip is the plugin directory containing `dist/`, `main.py`, `deck_hid.py`, `game_audio.py`, `player.py`, `plex.py`, `plex_auth.py`, `progress.py`, `plugin.json`, `package.json`, `LICENSE`, `NOTICE`, and `README.md`.
 
 ## Setup
 

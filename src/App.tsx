@@ -6,6 +6,7 @@ import {
   PanelSectionRow,
   SliderField,
   TextField,
+  ToggleField,
 } from "@decky/ui";
 import { useEffect, useRef, useState } from "react";
 
@@ -33,6 +34,9 @@ import {
   previousChapter,
   saveSettings,
   selectServer,
+  setAutoLowerGame,
+  setDuckLevel,
+  setGameVolume,
   setSpeed,
   setVolume,
   signOut,
@@ -201,10 +205,18 @@ function PlayerView({
   onRun: (action: () => Promise<{ success: boolean; message?: string }>) => Promise<void>;
 }) {
   const [volume, setLocalVolume] = useState<number | null>(null);
+  const [gameVolume, setLocalGameVolume] = useState<number | null>(null);
+  const [duckLevel, setLocalDuck] = useState<number | null>(null);
+  const [autoLower, setAutoLower] = useState<boolean | null>(null);
   const [localSpeed, setLocalSpeed] = useState<number | null>(null);
   const volumeTimer = useRef<number | null>(null);
+  const gameTimer = useRef<number | null>(null);
+  const duckTimer = useRef<number | null>(null);
   const speedTimer = useRef<number | null>(null);
   const shownVolume = volume !== null ? volume : status?.volume ?? 80;
+  const shownGame = gameVolume !== null ? gameVolume : status?.game_volume ?? 100;
+  const shownDuck = duckLevel !== null ? duckLevel : status?.duck_level ?? 30;
+  const lowerGame = autoLower !== null ? autoLower : status?.auto_lower_game !== false;
 
   useEffect(() => {
     return () => {
@@ -365,8 +377,7 @@ function PlayerView({
         </PanelSectionRow>
         <PanelSectionRow>
           <SliderField
-            label="Volume"
-            description="Applied to the audiobook, not the game."
+            label="Book volume"
             value={shownVolume}
             min={0}
             max={100}
@@ -382,6 +393,54 @@ function PlayerView({
             }}
           />
         </PanelSectionRow>
+        <PanelSectionRow>
+          <SliderField
+            label="Game volume"
+            value={shownGame}
+            min={0}
+            max={100}
+            step={1}
+            showValue={true}
+            onChange={(value) => {
+              setLocalGameVolume(value);
+              if (gameTimer.current !== null) window.clearTimeout(gameTimer.current);
+              gameTimer.current = window.setTimeout(() => {
+                gameTimer.current = null;
+                void onRun(() => setGameVolume(value));
+              }, 300);
+            }}
+          />
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <ToggleField
+            label="Lower game while book plays"
+            checked={lowerGame}
+            onChange={(checked) => {
+              setAutoLower(checked);
+              void onRun(() => setAutoLowerGame(checked));
+            }}
+          />
+        </PanelSectionRow>
+        {lowerGame && (
+          <PanelSectionRow>
+            <SliderField
+              label="Lowered game volume"
+              value={shownDuck}
+              min={0}
+              max={100}
+              step={1}
+              showValue={true}
+              onChange={(value) => {
+                setLocalDuck(value);
+                if (duckTimer.current !== null) window.clearTimeout(duckTimer.current);
+                duckTimer.current = window.setTimeout(() => {
+                  duckTimer.current = null;
+                  void onRun(() => setDuckLevel(value));
+                }, 300);
+              }}
+            />
+          </PanelSectionRow>
+        )}
         {status?.track_progress === false && (
           <PanelSectionRow>
             <div style={{ whiteSpace: "normal", fontSize: "0.85em" }}>
@@ -758,10 +817,7 @@ function PlayPauseTrigger() {
       </PanelSectionRow>
       <PanelSectionRow>
         <div style={{ whiteSpace: "normal", fontSize: "0.85em" }}>
-          Default is R4, including in a game. Program button waits until you release every button, then records the
-          next press, so the A that opens Program is not saved. One button toggles on press. A combo is those buttons
-          held together. Leave a back button unbound in the game’s Steam Input layout; a combo can still reach the
-          game. Set Log level to Debug before a test.
+          Default is R4. Tap Program, then press the button or combo you want.
         </div>
       </PanelSectionRow>
       <PanelSectionRow>
@@ -1174,8 +1230,7 @@ function SettingsView({
         <PanelSection title="Choose a library">
           <PanelSectionRow>
             <div style={{ whiteSpace: "normal" }}>
-              Choose the Plex library that holds your audiobooks. Tap one name, then Use this library. Only one
-              library is used at a time. This does not turn settings on or off.
+              Pick the library that holds your audiobooks.
             </div>
           </PanelSectionRow>
           {libraries.map((library) => {
@@ -1200,7 +1255,7 @@ function SettingsView({
                   <>
                     Resume in Plex: Off. Resume is controlled by Plex’s server setting “Store track progress”
                     (Plex web: Manage Library, Edit, Advanced). This plugin cannot change it. With it off, Plex only
-                    marks whole tracks played and will not keep your spot for other apps such as Prologue.
+                    marks whole tracks played and will not keep your spot for other Plex apps.
                   </>
                 )}
                 {selected.track_progress === true && (

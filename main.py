@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
 import json
 import logging
 import os
+import signal
 import sys
 import threading
 import time
@@ -15,6 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import decky
 
 from deck_hid import DeckHidWatcher, migrate_shortcut, normalize_buttons
+from game_audio import GameMixer, clamp_percent, pactl_run, truthy
 from player import Player, PlayerError, build_child_env, find_ffplay, find_pulse_socket, set_process_volume
 from plex import PlexClient, PlexError, normalize_server_url
 from plex_auth import (
@@ -44,7 +47,7 @@ from progress import (
     track_is_complete,
 )
 
-VERSION = "0.1.5"
+VERSION = "0.1.6"
 REPORT_INTERVAL_S = 10
 _PY_LOG_LEVELS = {
     "error": logging.ERROR,
@@ -68,6 +71,9 @@ DEFAULTS = {
     "client_id": "",
     "speed": 1.0,
     "volume": 80,
+    "game_volume": 100,
+    "auto_lower_game": True,
+    "duck_level": 30,
     "book_sort": "recently_played",
     "play_pause_buttons": ["R4"],
     "play_pause_source": "hidraw",
@@ -118,6 +124,8 @@ class Plugin:
         self._local_probe_at = 0.0
         self._probe_soon = False
         self._play_queue_item_id = ""
+        self._game = None
+        self._game_restored = False
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -139,6 +147,12 @@ class Plugin:
         os.makedirs(log_dir, exist_ok=True)
         env = build_child_env(dict(os.environ), find_pulse_socket())
         self.player = Player(find_ffplay(), os.path.join(log_dir, "ffplay.log"), env)
+        self._game = GameMixer(
+            lambda args: pactl_run(env, args),
+            os.path.join(settings_dir, "game-audio.json"),
+            lambda message: decky.logger.warning("%s", message),
+        )
+        self._install_game_restore_hook()
         self._tick_task = asyncio.create_task(self._tick_loop())
         self._loop = asyncio.get_running_loop()
         self._hid = DeckHidWatcher(on_fire=self._schedule_shortcut, log_debug=self._hid_debug)
@@ -146,6 +160,68 @@ class Plugin:
         self._hid.start()
         asyncio.create_task(self._populate_connections())
         decky.logger.info("Plex Audiobooks %s loaded", VERSION)
+
+    def _install_game_restore_hook(self) -> None:
+        atexit.register(self._restore_game_audio)
+        previous = signal.getsignal(signal.SIGTERM)
+
+        def _on_term(signum, frame):
+            self._restore_game_audio()
+            if callable(previous) and previous not in (signal.SIG_DFL, signal.SIG_IGN):
+                previous(signum, frame)
+
+        try:
+            signal.signal(signal.SIGTERM, _on_term)
+        except (OSError, ValueError):
+            pass
+
+    def _restore_game_audio(self) -> None:
+        if self._game_restored or self._game is None:
+            return
+        self._game_restored = True
+        try:
+            self._game.restore_originals()
+        except Exception:
+            decky.logger.warning("Could not restore game volume")
+
+    def _own_ffplay_pids(self) -> set[str]:
+        player = self.player
+        if player is None or player.proc is None or not player.proc.pid:
+            return set()
+        return {str(player.proc.pid)}
+
+    def _book_is_playing(self) -> bool:
+        player = self.player
+        return bool(player and player.process_alive() and not player.paused and self.tracks)
+
+    def _sync_game_audio(self) -> None:
+        if self._game is None or self._game_restored:
+            return
+        playing = self._book_is_playing()
+        game_volume = clamp_percent(self.settings.get("game_volume"), 100)
+        if not playing and game_volume >= 100 and not self._game.book.apps:
+            return
+        self._game.sync(
+            playing=self._book_is_playing(),
+            own_pids=self._own_ffplay_pids(),
+            game_volume=clamp_percent(self.settings.get("game_volume"), 100),
+            duck_level=clamp_percent(self.settings.get("duck_level"), 30),
+            auto_lower=truthy(self.settings.get("auto_lower_game"), True),
+        )
+
+    def _kick_game_audio(self) -> None:
+        if not self._running:
+            return
+        try:
+            asyncio.get_running_loop().create_task(self._sync_game_soon())
+        except RuntimeError:
+            self._sync_game_audio()
+
+    async def _sync_game_soon(self) -> None:
+        try:
+            await _to_thread(self._sync_game_audio)
+        except Exception:
+            decky.logger.warning("Game volume change failed")
 
     async def _unload(self):
         self._running = False
@@ -158,6 +234,7 @@ class Plugin:
             await self.stop_playback()
         except Exception:
             decky.logger.error("Stop during unload failed")
+        self._restore_game_audio()
         decky.logger.info("Plex Audiobooks unloaded")
 
     async def _uninstall(self):
@@ -182,6 +259,9 @@ class Plugin:
             merged["log_level"] = normalize_log_level(merged.get("log_level"))
             merged["play_pause_buttons"] = migrate_shortcut(loaded)
             merged["play_pause_source"] = "hidraw"
+            merged["game_volume"] = clamp_percent(merged.get("game_volume"), 100)
+            merged["duck_level"] = clamp_percent(merged.get("duck_level"), 30)
+            merged["auto_lower_game"] = truthy(merged.get("auto_lower_game"), True)
             self.settings = merged
         except Exception:
             # The file contains the token. Do not log the parse error or the body.
@@ -365,6 +445,9 @@ class Plugin:
             "track_progress": self.settings.get("track_progress"),
             "speed": speed,
             "volume": int(self.settings.get("volume") if self.settings.get("volume") is not None else 80),
+            "game_volume": clamp_percent(self.settings.get("game_volume"), 100),
+            "auto_lower_game": truthy(self.settings.get("auto_lower_game"), True),
+            "duck_level": clamp_percent(self.settings.get("duck_level"), 30),
             "book_sort": normalize_book_sort(self.settings.get("book_sort")),
             "play_pause_buttons": list(self.settings.get("play_pause_buttons") or []),
             "hidraw_active": bool(self._hid.active) if self._hid is not None else False,
@@ -382,6 +465,24 @@ class Plugin:
         await self._save_settings()
         decky.logger.info("Log level set to %s", self.settings["log_level"])
         return {"success": True, "log_level": self.settings["log_level"]}
+
+    async def set_game_volume(self, volume: int):
+        self.settings["game_volume"] = clamp_percent(volume, 100)
+        await self._save_settings()
+        self._kick_game_audio()
+        return {"success": True, "game_volume": self.settings["game_volume"]}
+
+    async def set_auto_lower_game(self, enabled: bool):
+        self.settings["auto_lower_game"] = bool(enabled)
+        await self._save_settings()
+        self._kick_game_audio()
+        return {"success": True, "auto_lower_game": self.settings["auto_lower_game"]}
+
+    async def set_duck_level(self, volume: int):
+        self.settings["duck_level"] = clamp_percent(volume, 30)
+        await self._save_settings()
+        self._kick_game_audio()
+        return {"success": True, "duck_level": self.settings["duck_level"]}
 
     async def log_frontend(self, level: str, message: str):
         """Frontend diagnostic line. Dropped when it is finer than the saved level."""
@@ -858,6 +959,7 @@ class Plugin:
                 else:
                     self.player.pause()
                     await self._report_current("paused")
+                self._kick_game_audio()
                 return {"success": True}
             index = self.index
             offset = self._current_offset()
@@ -899,6 +1001,7 @@ class Plugin:
                 if self.player is not None:
                     self.rest_offset_ms = current.duration_ms
                     self.player.stop()
+                self._kick_game_audio()
                 return {"success": True, "message": "That's the end of the book."}
             return await self._start_track_locked(self.index + 1, 0)
 
@@ -971,6 +1074,7 @@ class Plugin:
         track = self.tracks[self.index]
         self.player.stop()
         await self._report_locked(track, "stopped", position, finishing=False)
+        self._kick_game_audio()
         return {"success": True}
 
     async def _start_track_locked(self, index: int, offset_ms: int) -> dict:
@@ -1006,10 +1110,12 @@ class Plugin:
             )
         except PlayerError as err:
             self.last_error = err.message
+            self._kick_game_audio()
             return {"success": False, "message": err.message}
         except Exception:
             decky.logger.error("ffplay failed to launch")
             self.last_error = "Couldn't start playback."
+            self._kick_game_audio()
             return {"success": False, "message": self.last_error}
         title = (self.book or {}).get("title") or "Audiobook"
         decky.logger.info("Playing %s — %s", title, track.title)
@@ -1026,9 +1132,11 @@ class Plugin:
                 decky.logger.error("ffplay: %s", log[:400])
             self.player.stop()
             self.rest_offset_ms = offset_ms
+            self._kick_game_audio()
             return {"success": False, "message": self.last_error}
         self.last_error = None
         await self._report_current("playing")
+        self._kick_game_audio()
         return {"success": True}
 
     async def _open_queue(self, rating_key: str) -> None:
@@ -1112,6 +1220,10 @@ class Plugin:
                 await self._maybe_prefer_local()
             except Exception:
                 decky.logger.debug("Local Plex check failed")
+            try:
+                await _to_thread(self._sync_game_audio)
+            except Exception:
+                decky.logger.debug("Game volume sync failed")
             await asyncio.sleep(1)
 
     async def _tick(self) -> None:
@@ -1149,6 +1261,7 @@ class Plugin:
             return
         self.rest_offset_ms = track.duration_ms
         self.last_error = None
+        self._kick_game_audio()
 
     async def _on_track_failed_locked(self) -> None:
         if self.player is None or not self.tracks:
@@ -1161,6 +1274,7 @@ class Plugin:
             decky.logger.error("ffplay: %s", log[:400])
         self.last_error = "Playback stopped unexpectedly. Check that the server is reachable."
         await self._report_locked(self.tracks[self.index], "stopped", position, finishing=False)
+        self._kick_game_audio()
 
     def _status_locked(self) -> dict:
         speed = self._nearest_speed(self.settings.get("speed") or 1)
@@ -1180,6 +1294,9 @@ class Plugin:
             "book_duration_ms": 0,
             "speed": speed,
             "volume": self.volume,
+            "game_volume": clamp_percent(self.settings.get("game_volume"), 100),
+            "auto_lower_game": truthy(self.settings.get("auto_lower_game"), True),
+            "duck_level": clamp_percent(self.settings.get("duck_level"), 30),
             "last_error": self.last_error,
             "album_key": "",
             "configured": self._configured_message() is None,

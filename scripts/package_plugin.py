@@ -19,6 +19,7 @@ FILES = [
     "dist/index.js",
     "main.py",
     "deck_hid.py",
+    "game_audio.py",
     "player.py",
     "plex.py",
     "plex_auth.py",
