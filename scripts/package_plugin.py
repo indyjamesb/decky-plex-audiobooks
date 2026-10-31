@@ -20,6 +20,7 @@ FILES = [
     "main.py",
     "player.py",
     "plex.py",
+    "plex_auth.py",
     "progress.py",
     "plugin.json",
     "package.json",

@@ -1,8 +1,8 @@
 """Small Plex Media Server client for audiobook libraries.
 
 Audiobooks live in a Music library (section type ``artist``). An album is a
-book, ``parentTitle`` is the author, and tracks are the files. There is no
-separate Plex library type for audiobooks; this is the same model Prologue uses.
+book, ``parentTitle`` is the author, and tracks are the files. Plex has no
+separate audiobook library type.
 
 The token is sent only as the ``X-Plex-Token`` header, never placed in a URL,
 so server errors and player logs do not record it. Callers must not log the
@@ -17,21 +17,13 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from plex_auth import PRODUCT_NAME, PRODUCT_VERSION, PlexError, client_headers
 from progress import AudioTrack, timeline_duration_ms
 
-_USER_AGENT = "PlexAudiobooks/0.1.0"
 _IDENTIFIER = "com.plexapp.plugins.library"
 _UNREACHABLE = (
     "Can't reach the Plex server. Check the URL and that this Deck is on the same network."
 )
-
-
-class PlexError(Exception):
-    def __init__(self, message: str, *, unreachable: bool = False, status: int | None = None):
-        super().__init__(message)
-        self.message = message
-        self.unreachable = unreachable
-        self.status = status
 
 
 def normalize_server_url(url: str) -> str:
@@ -125,19 +117,9 @@ class PlexClient:
         self.timeout = timeout
 
     def _headers(self) -> dict[str, str]:
-        return {
-            "X-Plex-Token": self.token,
-            "X-Plex-Client-Identifier": self.client_id,
-            "X-Plex-Product": "Plex Audiobooks",
-            "X-Plex-Version": "0.1.0",
-            "X-Plex-Platform": "Linux",
-            "X-Plex-Platform-Version": "SteamOS",
-            "X-Plex-Device": "Steam Deck",
-            "X-Plex-Device-Name": "Plex Audiobooks",
-            "X-Plex-Provides": "player",
-            "Accept": "application/json",
-            "User-Agent": _USER_AGENT,
-        }
+        headers = client_headers(self.client_id, self.token)
+        headers["X-Plex-Provides"] = "player"
+        return headers
 
     def media_headers(self) -> str:
         """Header block for ffplay. Ends with CRLF, as ffmpeg requires.
@@ -148,10 +130,10 @@ class PlexClient:
         lines = [
             f"X-Plex-Token: {self.token}",
             f"X-Plex-Client-Identifier: {self.client_id}",
-            "X-Plex-Product: Plex Audiobooks",
-            "X-Plex-Version: 0.1.0",
+            f"X-Plex-Product: {PRODUCT_NAME}",
+            f"X-Plex-Version: {PRODUCT_VERSION}",
             "X-Plex-Device: Steam Deck",
-            "X-Plex-Device-Name: Plex Audiobooks",
+            f"X-Plex-Device-Name: {PRODUCT_NAME}",
         ]
         return "".join(line + "\r\n" for line in lines)
 

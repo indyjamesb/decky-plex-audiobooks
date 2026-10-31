@@ -8,12 +8,36 @@ export interface LibraryInfo {
 
 export interface Settings {
   server_url: string;
+  server_name: string;
+  username: string;
+  signed_in: boolean;
+  auth_method: string;
   has_token: boolean;
   library_key: string;
   library_title: string;
   track_progress: boolean | null;
   speed: number;
   volume: number;
+}
+
+export interface PlexServerChoice {
+  client_identifier: string;
+  name: string;
+  uri: string;
+  local: boolean;
+}
+
+export interface SignInResult extends ActionResult {
+  pending?: boolean;
+  signed_in?: boolean;
+  username?: string;
+  code?: string;
+  link?: string;
+  servers?: PlexServerChoice[];
+  expired?: boolean;
+  server_url?: string;
+  server_name?: string;
+  local?: boolean;
 }
 
 export interface ActionResult {
@@ -103,3 +127,8 @@ export const previousChapter = callable<[], ActionResult>("previous_chapter");
 export const setSpeed = callable<[speed: number], ActionResult>("set_speed");
 export const setVolume = callable<[volume: number], ActionResult>("set_volume");
 export const getStatus = callable<[], PlaybackStatus>("get_status");
+export const startSignIn = callable<[], SignInResult>("start_sign_in");
+export const pollSignIn = callable<[], SignInResult>("poll_sign_in");
+export const listServers = callable<[], SignInResult>("list_servers");
+export const selectServer = callable<[clientIdentifier: string], SignInResult>("select_server");
+export const signOut = callable<[], ActionResult>("sign_out");

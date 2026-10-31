@@ -14,17 +14,23 @@ import {
   BookSummary,
   LibraryInfo,
   PlaybackStatus,
+  PlexServerChoice,
   getBook,
   getSettings,
   getStatus,
   listBooks,
+  listServers,
   nextChapter,
   playBook,
+  pollSignIn,
   previousChapter,
   saveSettings,
+  selectServer,
   setSpeed,
   setVolume,
+  signOut,
   skip,
+  startSignIn,
   stopPlayback,
   testConnection,
   togglePlayback,
@@ -561,13 +567,32 @@ function SettingsView({
   onSaved: () => void;
 }) {
   const [serverUrl, setServerUrl] = useState("");
+  const [serverName, setServerName] = useState("");
   const [token, setToken] = useState("");
   const [hasToken, setHasToken] = useState(false);
+  const [signedIn, setSignedIn] = useState(false);
+  const [username, setUsername] = useState("");
+  const [authMethod, setAuthMethod] = useState("");
   const [libraries, setLibraries] = useState<LibraryInfo[]>([]);
   const [libraryKey, setLibraryKey] = useState("");
+  const [servers, setServers] = useState<PlexServerChoice[]>([]);
+  const [code, setCode] = useState("");
+  const [advanced, setAdvanced] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+
+  async function loadLibraries(url: string, suppliedToken = "") {
+    const result = await testConnection(url, suppliedToken);
+    if (!result.success) {
+      setLibraries([]);
+      setError(result.message || "Couldn't reach the Plex server.");
+      return;
+    }
+    setLibraries(result.libraries || []);
+    setMessage(result.message || "");
+    if (result.libraries.length === 1) setLibraryKey(result.libraries[0].key);
+  }
 
   useEffect(() => {
     if (!ready) return;
@@ -577,17 +602,18 @@ function SettingsView({
         const settings = await getSettings();
         if (stop) return;
         setServerUrl(settings.server_url);
+        setServerName(settings.server_name);
         setHasToken(settings.has_token);
+        setSignedIn(settings.signed_in);
+        setUsername(settings.username);
+        setAuthMethod(settings.auth_method);
         setLibraryKey(settings.library_key);
         if (settings.has_token && settings.server_url) {
-          const result = await testConnection(settings.server_url, "");
-          if (stop) return;
-          if (result.success) {
-            setLibraries(result.libraries || []);
-            setMessage(result.message || "");
-          } else {
-            setError(result.message || "Couldn't reach the Plex server.");
-          }
+          await loadLibraries(settings.server_url);
+        } else if (settings.auth_method === "link" && settings.signed_in) {
+          const listed = await listServers();
+          if (!stop && listed.success) setServers(listed.servers || []);
+          else if (!stop && listed.message) setError(listed.message);
         }
       } catch {
         if (!stop) setError("The plugin backend is not responding.");
@@ -598,22 +624,138 @@ function SettingsView({
     };
   }, [ready]);
 
+  useEffect(() => {
+    if (!code) return;
+    let stop = false;
+    const poll = async () => {
+      try {
+        const result = await pollSignIn();
+        if (stop) return;
+        if (result.expired) {
+          setCode("");
+          setError(result.message || "That code expired. Request a new one.");
+          return;
+        }
+        if (!result.success && result.message) setError(result.message);
+        if (result.signed_in) {
+          setCode("");
+          setSignedIn(true);
+          setAuthMethod("link");
+          setUsername(result.username || "");
+          setServers(result.servers || []);
+          setMessage(result.message || "Signed in. Choose a server.");
+          setError(result.servers && result.servers.length > 0 ? "" : (result.message || ""));
+        }
+      } catch {
+        if (!stop) setError("Can't reach plex.tv to sign in.");
+      }
+    };
+    void poll();
+    const id = window.setInterval(() => void poll(), 2000);
+    return () => {
+      stop = true;
+      window.clearInterval(id);
+    };
+  }, [code]);
+
   const selected = libraries.find((library) => library.key === libraryKey);
+
+  async function onStartSignIn() {
+    setBusy(true);
+    setError("");
+    setMessage("");
+    setServers([]);
+    try {
+      const result = await startSignIn();
+      if (!result.success || !result.code) {
+        setError(result.message || "Couldn't start sign-in.");
+        return;
+      }
+      setCode(result.code);
+    } catch {
+      setError("Can't reach plex.tv to sign in.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onSelectServer(server: PlexServerChoice) {
+    setBusy(true);
+    setError("");
+    try {
+      const result = await selectServer(server.client_identifier);
+      if (!result.success) {
+        setError(result.message || "Couldn't use that server.");
+        return;
+      }
+      const url = result.server_url || server.uri;
+      setServerUrl(url);
+      setServerName(result.server_name || server.name);
+      setAuthMethod("link");
+      setHasToken(true);
+      setServers([]);
+      setLibraryKey("");
+      setMessage(server.local ? `Using the local server at ${url}.` : `Using ${url}.`);
+      await loadLibraries(url);
+    } catch {
+      setError("Couldn't reach that Plex server.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onChangeServer() {
+    setBusy(true);
+    setError("");
+    try {
+      const listed = await listServers();
+      if (!listed.success) {
+        setError(listed.message || "Couldn't load your Plex servers.");
+        return;
+      }
+      setLibraries([]);
+      setServers(listed.servers || []);
+    } catch {
+      setError("Can't reach plex.tv to list servers.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onSignOut() {
+    setBusy(true);
+    setError("");
+    try {
+      const result = await signOut();
+      if (!result.success) {
+        setError(result.message || "Couldn't sign out.");
+        return;
+      }
+      setSignedIn(false);
+      setHasToken(false);
+      setUsername("");
+      setAuthMethod("");
+      setServerUrl("");
+      setServerName("");
+      setLibraries([]);
+      setLibraryKey("");
+      setServers([]);
+      setCode("");
+      setToken("");
+      setMessage("Signed out.");
+    } catch {
+      setError("Couldn't sign out.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function onTest() {
     setBusy(true);
     setError("");
     setMessage("");
     try {
-      const result = await testConnection(serverUrl, token);
-      if (!result.success) {
-        setLibraries([]);
-        setError(result.message || "Couldn't reach the Plex server.");
-        return;
-      }
-      setLibraries(result.libraries || []);
-      setMessage(result.message || "Connected.");
-      if (result.libraries.length === 1) setLibraryKey(result.libraries[0].key);
+      await loadLibraries(serverUrl, token);
     } catch {
       setError("Can't reach the Plex server.");
     } finally {
@@ -653,71 +795,140 @@ function SettingsView({
 
   return (
     <>
-    <PanelSection title="Server">
-      <PanelSectionRow>
-        <ButtonItem layout="below" onClick={onBack}>
-          Back
-        </ButtonItem>
-      </PanelSectionRow>
-      <PanelSectionRow>
-        <TextField
-          label="Plex URL"
-          description="Example: http://10.0.0.91:32400"
-          value={serverUrl}
-          onChange={(event) => setServerUrl(event.target.value)}
-        />
-      </PanelSectionRow>
-      <PanelSectionRow>
-        <TextField
-          label="Plex token"
-          description={hasToken ? "A token is saved on this Deck. Leave this blank to keep it." : "Stored only on this Deck. It is not logged."}
-          value={token}
-          bIsPassword={true}
-          onChange={(event) => setToken(event.target.value)}
-        />
-      </PanelSectionRow>
-      <PanelSectionRow>
-        <ButtonItem layout="below" disabled={busy} onClick={() => void onTest()}>
-          {busy ? "Working…" : "Test connection"}
-        </ButtonItem>
-      </PanelSectionRow>
-      {message && (
+      <PanelSection title="Account">
         <PanelSectionRow>
-          <div style={{ whiteSpace: "normal" }}>{message}</div>
+          <ButtonItem layout="below" onClick={onBack}>
+            Back
+          </ButtonItem>
         </PanelSectionRow>
-      )}
-      <ErrorText text={error} />
-    </PanelSection>
-    {libraries.length > 0 && (
-      <PanelSection title="Library">
-        {libraries.map((library) => (
-          <PanelSectionRow key={library.key}>
-            <ButtonItem layout="below" onClick={() => setLibraryKey(library.key)}>
+        {signedIn && username && (
+          <PanelSectionRow>
+            <div style={{ whiteSpace: "normal" }}>{`Signed in as ${username}`}</div>
+          </PanelSectionRow>
+        )}
+        {hasToken && serverUrl && servers.length === 0 && !code && (
+          <PanelSectionRow>
+            <div style={{ whiteSpace: "normal" }}>
+              {serverName ? serverName : "Server"}
+              {` · ${serverUrl}`}
+            </div>
+          </PanelSectionRow>
+        )}
+        {!code && servers.length === 0 && authMethod !== "link" && (
+          <PanelSectionRow>
+            <ButtonItem layout="below" disabled={busy} onClick={() => void onStartSignIn()}>
+              {busy ? "Working…" : signedIn ? "Sign in with Plex instead" : "Sign in with Plex"}
+            </ButtonItem>
+          </PanelSectionRow>
+        )}
+        {code && (
+          <>
+            <PanelSectionRow>
+              <div style={{ width: "100%", textAlign: "center" }}>
+                <div style={{ fontSize: "1.6em", letterSpacing: "0.25em", fontWeight: 700 }}>{code}</div>
+                <div style={{ whiteSpace: "normal", marginTop: 6 }}>
+                  On a phone or computer, open plex.tv/link and enter this code.
+                </div>
+              </div>
+            </PanelSectionRow>
+            <PanelSectionRow>
+              <div style={{ whiteSpace: "normal", opacity: 0.8 }}>Waiting for Plex…</div>
+            </PanelSectionRow>
+          </>
+        )}
+        {servers.map((server) => (
+          <PanelSectionRow key={server.client_identifier || server.uri}>
+            <ButtonItem layout="below" disabled={busy} onClick={() => void onSelectServer(server)}>
               <div style={{ whiteSpace: "normal", textAlign: "left" }}>
-                {library.key === libraryKey ? "● " : "○ "}
-                {library.title}
-                {library.track_progress === false ? " · track progress off" : ""}
+                <div>{server.name}</div>
+                <div style={{ opacity: 0.75, fontSize: "0.85em" }}>
+                  {server.uri}
+                  {server.local ? " · local" : ""}
+                </div>
               </div>
             </ButtonItem>
           </PanelSectionRow>
         ))}
-        {selected?.track_progress === false && (
+        {authMethod === "link" && signedIn && !code && (
           <PanelSectionRow>
-            <div style={{ whiteSpace: "normal", fontSize: "0.85em" }}>
-              Turn on Store track progress for this library in Plex (Manage Library, Edit, Advanced) or resume sync
-              with Prologue will not stick.
-            </div>
+            <ButtonItem layout="below" disabled={busy} onClick={() => void onChangeServer()}>
+              Choose a different server
+            </ButtonItem>
           </PanelSectionRow>
         )}
+        {signedIn && (
+          <PanelSectionRow>
+            <ButtonItem layout="below" disabled={busy} onClick={() => void onSignOut()}>
+              Sign out
+            </ButtonItem>
+          </PanelSectionRow>
+        )}
+        <PanelSectionRow>
+          <ButtonItem layout="below" onClick={() => setAdvanced((open) => !open)}>
+            {advanced ? "Hide advanced settings" : "Advanced: URL and token"}
+          </ButtonItem>
+        </PanelSectionRow>
+        {message && (
+          <PanelSectionRow>
+            <div style={{ whiteSpace: "normal" }}>{message}</div>
+          </PanelSectionRow>
+        )}
+        <ErrorText text={error} />
       </PanelSection>
-    )}
-    <PanelSection>
-      <PanelSectionRow>
-        <ButtonItem layout="below" disabled={busy} onClick={() => void onSave()}>
-          Save
-        </ButtonItem>
-      </PanelSectionRow>
-    </PanelSection>
+      {advanced && (
+        <PanelSection title="Advanced">
+          <PanelSectionRow>
+            <TextField
+              label="Plex URL"
+              description="Example: http://10.0.0.91:32400"
+              value={serverUrl}
+              onChange={(event) => setServerUrl(event.target.value)}
+            />
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <TextField
+              label="Plex token"
+              description={hasToken ? "A token is saved on this Deck. Leave this blank to keep it." : "Stored only on this Deck. It is not logged."}
+              value={token}
+              bIsPassword={true}
+              onChange={(event) => setToken(event.target.value)}
+            />
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ButtonItem layout="below" disabled={busy} onClick={() => void onTest()}>
+              {busy ? "Working…" : "Test connection"}
+            </ButtonItem>
+          </PanelSectionRow>
+        </PanelSection>
+      )}
+      {libraries.length > 0 && (
+        <PanelSection title="Library">
+          {libraries.map((library) => (
+            <PanelSectionRow key={library.key}>
+              <ButtonItem layout="below" onClick={() => setLibraryKey(library.key)}>
+                <div style={{ whiteSpace: "normal", textAlign: "left" }}>
+                  {library.key === libraryKey ? "● " : "○ "}
+                  {library.title}
+                  {library.track_progress === false ? " · track progress off" : ""}
+                </div>
+              </ButtonItem>
+            </PanelSectionRow>
+          ))}
+          {selected?.track_progress === false && (
+            <PanelSectionRow>
+              <div style={{ whiteSpace: "normal", fontSize: "0.85em" }}>
+                Turn on Store track progress for this library in Plex (Manage Library, Edit, Advanced). Without it,
+                Plex does not keep a resume point that other clients can pick up.
+              </div>
+            </PanelSectionRow>
+          )}
+          <PanelSectionRow>
+            <ButtonItem layout="below" disabled={busy} onClick={() => void onSave()}>
+              Save library
+            </ButtonItem>
+          </PanelSectionRow>
+        </PanelSection>
+      )}
     </>
   );
 }

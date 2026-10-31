@@ -14,6 +14,7 @@ import decky
 
 from player import Player, PlayerError, build_child_env, find_ffplay, find_pulse_socket, set_process_volume
 from plex import PlexClient, PlexError, normalize_server_url
+from plex_auth import PlexAccount, public_server, sign_in_payload
 from progress import (
     AudioTrack,
     book_position,
@@ -31,7 +32,12 @@ SPEEDS = (0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0)
 
 DEFAULTS = {
     "server_url": "",
+    "server_name": "",
+    "server_id": "",
     "token": "",
+    "account_token": "",
+    "username": "",
+    "auth_method": "",
     "library_key": "",
     "library_title": "",
     "track_progress": None,
@@ -72,6 +78,9 @@ class Plugin:
         self._align_gen = 0
         self._started_wall = 0.0
         self._cover_cache: dict[str, str] = {}
+        self._pending_pin: dict | None = None
+        # Full server records, including access tokens. Never returned to the panel.
+        self._server_cache: list[dict] = []
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -161,10 +170,28 @@ class Plugin:
             return "Choose an audiobook library in Settings."
         return None
 
+    def _ensure_client_id(self) -> str:
+        if not self.settings.get("client_id"):
+            self.settings["client_id"] = os.urandom(16).hex()
+            if self.settings_path:
+                try:
+                    self._write_settings()
+                except Exception:
+                    decky.logger.error("Could not save settings")
+        return str(self.settings["client_id"])
+
+    def _account(self) -> PlexAccount:
+        return PlexAccount(self._ensure_client_id())
+
     async def get_settings(self):
         speed = self._nearest_speed(self.settings.get("speed") or 1)
+        signed_in = bool(self.settings.get("account_token") or self.settings.get("token"))
         return {
             "server_url": self.settings.get("server_url") or "",
+            "server_name": self.settings.get("server_name") or "",
+            "username": self.settings.get("username") or "",
+            "signed_in": signed_in,
+            "auth_method": self.settings.get("auth_method") or "",
             "has_token": bool(self.settings.get("token")),
             "library_key": self.settings.get("library_key") or "",
             "library_title": self.settings.get("library_title") or "",
@@ -182,8 +209,9 @@ class Plugin:
             if any(char in supplied_token for char in "\r\n"):
                 return {"success": False, "message": "The Plex token contains characters that are not allowed."}
             self.settings["token"] = supplied_token
+            self.settings["auth_method"] = "manual"
         if not self.settings.get("token"):
-            return {"success": False, "message": "Enter a Plex token. It is stored only on this Deck."}
+            return {"success": False, "message": "Enter a Plex token, or sign in with a link code."}
         self.settings["server_url"] = url
         self.settings["library_key"] = str(library_key or "")
         # An empty title means the panel saved while the library list was not
@@ -223,6 +251,166 @@ class Plugin:
         except Exception:
             decky.logger.error("Connection test failed")
             return {"success": False, "message": "Couldn't reach the Plex server.", "libraries": []}
+
+    async def start_sign_in(self):
+        """Ask plex.tv for a short code the user enters at plex.tv/link."""
+
+        try:
+            pin = await _to_thread(self._account().create_pin)
+        except PlexError as err:
+            return sign_in_payload(success=False, message=err.message)
+        except Exception:
+            decky.logger.error("Could not start Plex sign-in")
+            return sign_in_payload(success=False, message="Can't reach plex.tv to sign in.")
+        self._pending_pin = {"id": pin["id"], "code": pin["code"]}
+        return sign_in_payload(pending=True, code=pin["code"])
+
+    async def poll_sign_in(self):
+        """One poll of the current code. The panel calls this until it is claimed."""
+
+        pending = self._pending_pin
+        if not pending:
+            if self.settings.get("account_token"):
+                listed = await self.list_servers()
+                return sign_in_payload(
+                    success=bool(listed.get("success")),
+                    signed_in=True,
+                    username=self.settings.get("username") or "",
+                    servers=self._server_cache if listed.get("success") else [],
+                    message=listed.get("message") or "",
+                )
+            return sign_in_payload(success=False, message="Request a sign-in code first.")
+        try:
+            status = await _to_thread(self._account().check_pin, pending["id"], pending["code"])
+        except PlexError as err:
+            return sign_in_payload(success=False, pending=True, code=pending["code"], message=err.message)
+        except Exception:
+            decky.logger.error("Plex sign-in poll failed")
+            return sign_in_payload(
+                success=False, pending=True, code=pending["code"], message="Can't reach plex.tv to sign in.",
+            )
+        state = status.get("state")
+        if state == "pending":
+            return sign_in_payload(pending=True, code=pending["code"])
+        if state != "authorized":
+            self._pending_pin = None
+            return sign_in_payload(
+                success=False, expired=True, message="That code expired. Request a new one.",
+            )
+        account_token = str(status.get("auth_token") or "").strip()
+        if not account_token or any(char in account_token for char in "\r\n"):
+            self._pending_pin = None
+            return sign_in_payload(success=False, message="Plex did not return a usable sign-in.")
+        self.settings["account_token"] = account_token
+        self.settings["auth_method"] = "link"
+        self._pending_pin = None
+        self._server_cache = []
+        await self._save_settings()
+        try:
+            username = await _to_thread(self._account().username, account_token)
+        except Exception:
+            decky.logger.warning("Could not read the Plex account name")
+            username = ""
+        if username:
+            self.settings["username"] = username
+            await self._save_settings()
+        listed = await self._load_servers(account_token)
+        return sign_in_payload(
+            success=True,
+            signed_in=True,
+            username=self.settings.get("username") or "",
+            servers=self._server_cache if listed.get("success") else [],
+            message="" if listed.get("success") else (listed.get("message") or "Couldn't load your Plex servers."),
+        )
+
+    async def list_servers(self):
+        token = str(self.settings.get("account_token") or "")
+        if not token:
+            return {"success": False, "message": "Sign in first.", "servers": []}
+        return await self._load_servers(token)
+
+    async def _load_servers(self, account_token: str) -> dict:
+        try:
+            servers = await _to_thread(self._account().list_servers, account_token)
+        except PlexError as err:
+            return {"success": False, "message": err.message, "servers": []}
+        except Exception:
+            decky.logger.error("Could not list Plex servers")
+            return {"success": False, "message": "Couldn't load your Plex servers.", "servers": []}
+        self._server_cache = servers
+        return {"success": True, "servers": [public_server(server) for server in servers]}
+
+    async def select_server(self, client_identifier: str):
+        client_identifier = str(client_identifier or "")
+        if not self._server_cache:
+            token = str(self.settings.get("account_token") or "")
+            if not token:
+                return {"success": False, "message": "Sign in first."}
+            loaded = await self._load_servers(token)
+            if not loaded.get("success"):
+                return {"success": False, "message": loaded.get("message") or "Couldn't load your Plex servers."}
+        match = next(
+            (server for server in self._server_cache if server.get("client_identifier") == client_identifier),
+            None,
+        )
+        if match is None:
+            return {"success": False, "message": "That server is no longer listed. Refresh the list and try again."}
+        server_token = str(match.get("access_token") or self.settings.get("account_token") or "").strip()
+        if not server_token or any(char in server_token for char in "\r\n"):
+            return {"success": False, "message": "Plex did not provide a token for that server."}
+        new_url = str(match.get("uri") or "")
+        changed = (
+            new_url != (self.settings.get("server_url") or "")
+            or (self.settings.get("server_id") or "") != client_identifier
+        )
+        if changed and self.tracks:
+            async with self._lock:
+                await self._stop_locked()
+                self.book = None
+                self.tracks = []
+                self.cover = ""
+        self.settings["token"] = server_token
+        self.settings["server_url"] = new_url
+        self.settings["server_name"] = match.get("name") or ""
+        self.settings["server_id"] = client_identifier
+        self.settings["auth_method"] = "link"
+        if changed:
+            self.settings["library_key"] = ""
+            self.settings["library_title"] = ""
+            self.settings["track_progress"] = None
+        await self._save_settings()
+        decky.logger.info("Selected Plex server %s", match.get("name") or "server")
+        return {
+            "success": True,
+            "server_url": new_url,
+            "server_name": match.get("name") or "",
+            "local": bool(match.get("local")),
+        }
+
+    async def sign_out(self):
+        try:
+            async with self._lock:
+                if self.tracks:
+                    await self._stop_locked()
+                self.book = None
+                self.tracks = []
+                self.cover = ""
+                self.last_error = None
+        except Exception:
+            decky.logger.error("Stop during sign-out failed")
+        for key in (
+            "token", "account_token", "server_url", "server_name", "server_id",
+            "username", "library_key", "library_title",
+        ):
+            self.settings[key] = ""
+        self.settings["track_progress"] = None
+        self.settings["auth_method"] = ""
+        self._pending_pin = None
+        self._server_cache = []
+        self._align_gen += 1
+        await self._save_settings()
+        decky.logger.info("Signed out of Plex")
+        return {"success": True}
 
     # ------------------------------------------------------------------
     # Library
