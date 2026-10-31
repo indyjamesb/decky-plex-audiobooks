@@ -3,24 +3,25 @@ import { FaBookOpen } from "react-icons/fa";
 
 import { App } from "./App";
 import { getSettings } from "./api";
-import { setShortcutConfig, startControllerShortcut, stopControllerShortcut } from "./controllerShortcut";
+import {
+  setShortcutButtons,
+  startControllerShortcut,
+  stopControllerShortcut,
+} from "./controllerShortcut";
+import { setClientLogLevel } from "./logClient";
 
 export default definePlugin(() => {
-  // The listener lives for the life of the plugin, not the Quick Access Menu,
-  // so a button can toggle playback while the menu is closed.
-  startControllerShortcut();
+  // Registered once for the life of the plugin, not while the Quick Access
+  // Menu is open. Decky Recorder does the same with window.SteamClient.
   void getSettings()
     .then((settings) => {
-      const mode = settings.play_pause_mode;
-      setShortcutConfig({
-        mode: mode === "back" || mode === "combo" ? mode : "off",
-        backButton: settings.play_pause_back === "L5" || settings.play_pause_back === "R4" || settings.play_pause_back === "R5"
-          ? settings.play_pause_back
-          : "L4",
-        combo: settings.play_pause_combo || [],
-      });
+      setClientLogLevel(settings.log_level || "info");
+      setShortcutButtons(settings.play_pause_buttons || []);
+      startControllerShortcut();
     })
-    .catch(() => undefined);
+    .catch(() => {
+      startControllerShortcut();
+    });
   return {
     name: "Plex Audiobooks",
     titleView: <div className={staticClasses.Title}>Plex Audiobooks</div>,

@@ -259,6 +259,39 @@ def compute_position_ms(
 
 
 BOOK_SORTS = ("recently_played", "title", "author", "recently_added")
+LOG_LEVELS = ("error", "warning", "info", "debug")
+PLAY_PAUSE_BUTTONS = (
+    "Select", "Start", "Steam", "A", "B", "X", "Y", "L1", "R1", "L3", "R3",
+    "L4", "L5", "R4", "R5",
+)
+
+
+def normalize_log_level(level: object) -> str:
+    text = str(level or "").strip().lower()
+    return text if text in LOG_LEVELS else "info"
+
+
+def play_pause_binding(settings: dict) -> list[str]:
+    """Current binding, migrating 0.1.1 mode/back/combo settings.
+
+    An empty list means play/pause is not bound.
+    """
+
+    raw = settings.get("play_pause_buttons")
+    if not isinstance(raw, list):
+        mode = str(settings.get("play_pause_mode") or "off")
+        if mode == "back":
+            raw = [settings.get("play_pause_back") or ""]
+        elif mode == "combo":
+            raw = settings.get("play_pause_combo") or []
+        else:
+            raw = []
+    cleaned: list[str] = []
+    for item in raw:
+        name = str(item)
+        if name in PLAY_PAUSE_BUTTONS and name not in cleaned:
+            cleaned.append(name)
+    return cleaned
 
 PLEX_SORT = {
     "recently_played": "lastViewedAt:desc",

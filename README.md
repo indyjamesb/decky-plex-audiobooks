@@ -9,13 +9,13 @@ Version 0.1 is a small player. One server, one library, browse and search, backg
 Build the zip on a computer (or on the Deck, if Node is installed), then copy it over. Decky does not need its plugin store for this.
 
 1. Install [Decky Loader](https://decky.xyz/) if it is not already installed.
-2. Copy `release/plex-audiobooks-v0.1.1.zip` to the Deck. The zip in this repository is already built.
+2. Copy `release/plex-audiobooks-v0.1.2.zip` to the Deck. The zip in this repository is already built.
 3. In Desktop Mode, or over SSH:
 
 ```bash
 mkdir -p ~/homebrew/plugins
 cd ~/homebrew/plugins
-unzip -o /path/to/plex-audiobooks-v0.1.1.zip
+unzip -o /path/to/plex-audiobooks-v0.1.2.zip
 ```
 
 The zip already contains a `plex-audiobooks` folder. You should end up with:
@@ -46,7 +46,7 @@ pnpm test
 pnpm run package
 ```
 
-`pnpm test` runs the Python unit tests. `pnpm run package` writes `release/plex-audiobooks-v0.1.1.zip`.
+`pnpm test` runs the Python unit tests. `pnpm run package` writes `release/plex-audiobooks-v0.1.2.zip`.
 
 `pnpm run build` only produces `dist/index.js`. A manual install without the zip is the plugin directory containing `dist/`, `main.py`, `player.py`, `plex.py`, `plex_auth.py`, `progress.py`, `plugin.json`, `package.json`, `LICENSE`, `NOTICE`, and `README.md`.
 
@@ -87,7 +87,8 @@ With that setting on, a position from another Plex audiobook app showed up in Pl
 - **Speed** moves in steps of 0.05 from 0.50x to 3.00x, so 1.20x is a real step. The last speed is saved. Changing it restarts the file at the current position.
 - **Volume** is the audiobook only. On SteamOS it is applied with `pactl` when that exists. Otherwise it is applied the next time a file starts.
 - The book bar is your place in the whole book. The chapter bar is your place in the current file.
-- **Play/pause button** is off until you turn it on. Choose one Deck back button (L4, L5, R4, or R5), or a combo of two or more buttons for a pad that has no back buttons. One press of the back button toggles playback. A combo has to be held together briefly. Leave a back button unbound in that game’s Steam Input layout so the game ignores it. A combo can still be seen by the game. This uses `SteamClient.Input.RegisterForControllerStateChanges`, the same callback [MagicPods](https://github.com/steam3d/MagicPodsDecky) and [Decky Recorder](https://github.com/SDH-Stewardship/decky-recorder-fork) use. L4 and R4 are in `ulUpperButtons`; L5 and R5 are in `ulButtons`. It has not been tested here while a game is focused, or with a docked Steam Controller.
+- **Play/pause button** starts as not set. **Program button**, then press and hold one button or several together. Releasing them (or holding them for a moment) saves that set. One button toggles on press. Two or more must be held together briefly. **Clear** turns it off. Leave a back button unbound in that game’s Steam Input layout so the game ignores it. A combo can still reach the game. Touchpad and stick touches are ignored. This uses `window.SteamClient.Input.RegisterForControllerStateChanges`, called the same way as [Decky Recorder](https://github.com/SDH-Stewardship/decky-recorder-fork) and [MagicPods](https://github.com/steam3d/MagicPodsDecky). L4 and R4 are upper-word bits. It has not been tested here on hardware.
+- **Log level** is a slider in settings (Error, Warning, Info, Debug), saved, default Info, same idea as MagicPods’ log-level slider. Controller diagnostics are Debug only. For a shortcut test, set Log level to Debug. Lines are written to `~/homebrew/logs/plex-audiobooks/plugin.log` with a `frontend:` prefix. Debug logging is for this test; leave it on Info afterwards.
 
 ### Progress sync
 

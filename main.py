@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import sys
 import time
@@ -20,6 +21,8 @@ from progress import (
     book_position,
     choose_resume,
     normalize_book_sort,
+    normalize_log_level,
+    play_pause_binding,
     playback_outcome,
     previous_target,
     reported_position_ms,
@@ -29,13 +32,14 @@ from progress import (
     track_is_complete,
 )
 
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 REPORT_INTERVAL_S = 15
-BACK_BUTTONS = ("L4", "L5", "R4", "R5")
-COMBO_BUTTONS = (
-    "Select", "Start", "Steam", "A", "B", "X", "Y", "L1", "R1", "L3", "R3",
-    "L4", "L5", "R4", "R5",
-)
+_PY_LOG_LEVELS = {
+    "error": logging.ERROR,
+    "warning": logging.WARNING,
+    "info": logging.INFO,
+    "debug": logging.DEBUG,
+}
 
 DEFAULTS = {
     "server_url": "",
@@ -52,9 +56,8 @@ DEFAULTS = {
     "speed": 1.0,
     "volume": 80,
     "book_sort": "recently_played",
-    "play_pause_mode": "off",
-    "play_pause_back": "L4",
-    "play_pause_combo": ["Select", "Y"],
+    "play_pause_buttons": [],
+    "log_level": "info",
 }
 
 
@@ -92,6 +95,7 @@ class Plugin:
         self._pending_pin: dict | None = None
         # Full server records, including access tokens. Never returned to the panel.
         self._server_cache: list[dict] = []
+        self._frontend_log_times: list[float] = []
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -107,6 +111,7 @@ class Plugin:
             self.settings["client_id"] = os.urandom(16).hex()
             self._write_settings()
         self.volume = int(self.settings.get("volume") or 80)
+        self._apply_log_level()
         log_dir = decky.DECKY_PLUGIN_LOG_DIR
         os.makedirs(log_dir, exist_ok=True)
         env = build_child_env(dict(os.environ), find_pulse_socket())
@@ -144,6 +149,12 @@ class Plugin:
             for key in DEFAULTS:
                 if key in loaded:
                     merged[key] = loaded[key]
+            merged["log_level"] = normalize_log_level(merged.get("log_level"))
+            # 0.1.1 stored mode/back/combo. Prefer an explicit button list.
+            if "play_pause_buttons" not in loaded:
+                merged["play_pause_buttons"] = play_pause_binding(loaded)
+            else:
+                merged["play_pause_buttons"] = play_pause_binding(merged)
             self.settings = merged
         except Exception:
             # The file contains the token. Do not log the parse error or the body.
@@ -210,10 +221,48 @@ class Plugin:
             "speed": speed,
             "volume": int(self.settings.get("volume") if self.settings.get("volume") is not None else 80),
             "book_sort": normalize_book_sort(self.settings.get("book_sort")),
-            "play_pause_mode": self._play_pause_mode(),
-            "play_pause_back": self._play_pause_back(),
-            "play_pause_combo": self._play_pause_combo(),
+            "play_pause_buttons": play_pause_binding(self.settings),
+            "log_level": normalize_log_level(self.settings.get("log_level")),
         }
+
+    def _apply_log_level(self) -> None:
+        name = normalize_log_level(self.settings.get("log_level"))
+        self.settings["log_level"] = name
+        decky.logger.setLevel(_PY_LOG_LEVELS[name])
+
+    async def set_log_level(self, level: str):
+        self.settings["log_level"] = normalize_log_level(level)
+        self._apply_log_level()
+        await self._save_settings()
+        decky.logger.info("Log level set to %s", self.settings["log_level"])
+        return {"success": True, "log_level": self.settings["log_level"]}
+
+    async def log_frontend(self, level: str, message: str):
+        """Frontend diagnostic line. Dropped when it is finer than the saved level."""
+
+        name = normalize_log_level(level) if str(level or "").lower() in _PY_LOG_LEVELS else "info"
+        if str(level or "").lower() in _PY_LOG_LEVELS:
+            name = str(level).lower()
+        if not decky.logger.isEnabledFor(_PY_LOG_LEVELS[name]):
+            return {"success": True, "logged": False}
+        text = " ".join(str(message or "").split())[:500]
+        if not text:
+            return {"success": True, "logged": False}
+        now = time.monotonic()
+        recent = [stamp for stamp in self._frontend_log_times if now - stamp < 60]
+        self._frontend_log_times = recent
+        if len(recent) >= 80 or sum(1 for stamp in recent if now - stamp < 1) >= 6:
+            return {"success": True, "logged": False}
+        self._frontend_log_times.append(now)
+        decky.logger.log(_PY_LOG_LEVELS[name], "frontend: %s", text)
+        return {"success": True, "logged": True}
+
+    async def set_play_pause_buttons(self, buttons: list):
+        cleaned = play_pause_binding({"play_pause_buttons": buttons if isinstance(buttons, list) else []})
+        self.settings["play_pause_buttons"] = cleaned
+        await self._save_settings()
+        decky.logger.info("Play/pause binding set to %s", "+".join(cleaned) or "not set")
+        return {"success": True, "play_pause_buttons": cleaned}
 
     async def save_settings(self, server_url: str, token: str, library_key: str, library_title: str, track_progress):
         url = normalize_server_url(server_url)
@@ -435,47 +484,6 @@ class Plugin:
         self.settings["book_sort"] = normalize_book_sort(sort_id)
         await self._save_settings()
         return {"success": True, "book_sort": self.settings["book_sort"]}
-
-    async def set_play_pause_trigger(self, mode: str, back_button: str, combo: list):
-        chosen = str(mode or "")
-        if chosen not in ("off", "back", "combo"):
-            chosen = "off"
-        back = str(back_button or "")
-        if back not in BACK_BUTTONS:
-            back = "L4"
-        cleaned: list[str] = []
-        if isinstance(combo, list):
-            for item in combo:
-                name = str(item)
-                if name in COMBO_BUTTONS and name not in cleaned:
-                    cleaned.append(name)
-        if chosen == "combo" and len(cleaned) < 2:
-            return {"success": False, "message": "A combo needs at least two buttons."}
-        self.settings["play_pause_mode"] = chosen
-        self.settings["play_pause_back"] = back
-        self.settings["play_pause_combo"] = cleaned or ["Select", "Y"]
-        await self._save_settings()
-        return {
-            "success": True,
-            "play_pause_mode": chosen,
-            "play_pause_back": back,
-            "play_pause_combo": self.settings["play_pause_combo"],
-        }
-
-    def _play_pause_mode(self) -> str:
-        mode = str(self.settings.get("play_pause_mode") or "off")
-        return mode if mode in ("off", "back", "combo") else "off"
-
-    def _play_pause_back(self) -> str:
-        back = str(self.settings.get("play_pause_back") or "L4")
-        return back if back in BACK_BUTTONS else "L4"
-
-    def _play_pause_combo(self) -> list[str]:
-        raw = self.settings.get("play_pause_combo")
-        if not isinstance(raw, list):
-            return ["Select", "Y"]
-        cleaned = [str(item) for item in raw if str(item) in COMBO_BUTTONS]
-        return cleaned or ["Select", "Y"]
 
     async def list_books(self, query: str = "", start: int = 0, sort_id: str = ""):
         problem = self._configured_message()

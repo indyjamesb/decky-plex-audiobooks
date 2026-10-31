@@ -21,7 +21,8 @@ import {
   listBooks,
   listServers,
   setBookSort,
-  setPlayPauseTrigger,
+  setLogLevel,
+  setPlayPauseButtons,
   nextChapter,
   playBook,
   pollSignIn,
@@ -37,7 +38,14 @@ import {
   testConnection,
   togglePlayback,
 } from "./api";
-import { setComboRecording, setShortcutConfig } from "./controllerShortcut";
+import {
+  bindingLabel,
+  cancelProgramming,
+  replayRegistrationLog,
+  setShortcutButtons,
+  startProgramming,
+} from "./controllerShortcut";
+import { setClientLogLevel } from "./logClient";
 import { BOOK_SORTS, BookSortId, formatSpeed, formatTime, snapSpeed, stepSpeed } from "./format";
 
 type View = "player" | "library" | "book" | "settings";
@@ -640,10 +648,7 @@ function BookView({
 }
 
 function PlayPauseTrigger() {
-  const [mode, setMode] = useState<"off" | "back" | "combo">("off");
-  const [backButton, setBackButton] = useState<"L4" | "L5" | "R4" | "R5">("L4");
-  const [combo, setCombo] = useState<string[]>(["Select", "Y"]);
-  const [held, setHeld] = useState<string[]>([]);
+  const [buttons, setButtons] = useState<string[]>([]);
   const [recording, setRecording] = useState(false);
   const [message, setMessage] = useState("");
 
@@ -652,149 +657,87 @@ function PlayPauseTrigger() {
     void getSettings()
       .then((settings) => {
         if (stop) return;
-        const nextMode = settings.play_pause_mode === "back" || settings.play_pause_mode === "combo"
-          ? settings.play_pause_mode
-          : "off";
-        const nextBack = settings.play_pause_back === "L5" || settings.play_pause_back === "R4" || settings.play_pause_back === "R5"
-          ? settings.play_pause_back
-          : "L4";
-        const nextCombo = (settings.play_pause_combo || []).filter((name) => name.length > 0);
-        setMode(nextMode);
-        setBackButton(nextBack);
-        if (nextCombo.length >= 2) setCombo(nextCombo);
-        setShortcutConfig({ mode: nextMode, backButton: nextBack, combo: nextCombo.length >= 2 ? nextCombo : ["Select", "Y"] });
+        const next = settings.play_pause_buttons || [];
+        setButtons(next);
+        setShortcutButtons(next);
+        setClientLogLevel(settings.log_level || "info");
       })
       .catch(() => undefined);
     return () => {
       stop = true;
-      setComboRecording(false, null);
+      cancelProgramming();
     };
   }, []);
 
-  async function save(nextMode: "off" | "back" | "combo", nextBack: "L4" | "L5" | "R4" | "R5", nextCombo: string[]) {
-    setMessage("");
-    const result = await setPlayPauseTrigger(nextMode, nextBack, nextCombo);
+  async function save(next: string[]) {
+    const result = await setPlayPauseButtons(next);
     if (!result.success) {
       setMessage(result.message || "Couldn't save that button.");
       return;
     }
-    const savedCombo = result.play_pause_combo || nextCombo;
-    setMode(nextMode);
-    setBackButton(nextBack);
-    setCombo(savedCombo);
-    setShortcutConfig({ mode: nextMode, backButton: nextBack, combo: savedCombo });
+    const saved = result.play_pause_buttons || next;
+    setButtons(saved);
+    setShortcutButtons(saved);
+    setMessage(saved.length ? `Play/pause: ${bindingLabel(saved)}` : "Play/pause: Not set");
   }
 
   return (
     <PanelSection title="Play/pause button">
       <PanelSectionRow>
-        <div style={{ whiteSpace: "normal", fontSize: "0.85em" }}>
-          Off by default. A single back button is read from Steam’s controller state, the same feed MagicPods and
-          Decky Recorder use. Leave that button unbound in the game’s Steam Input layout so the game ignores it. A
-          combo can still reach the game. Not tested here while a game is focused, or with a docked Steam Controller.
+        <div style={{ whiteSpace: "normal" }}>
+          {buttons.length ? `Play/pause: ${bindingLabel(buttons)}` : "Play/pause: Not set"}
         </div>
       </PanelSectionRow>
-      {(["off", "back", "combo"] as const).map((item) => (
-        <PanelSectionRow key={item}>
+      <PanelSectionRow>
+        <div style={{ whiteSpace: "normal", fontSize: "0.85em" }}>
+          Program button, then press and hold one button or several together. One button toggles on press. Two or
+          more must be held together briefly. Leave a back button unbound in the game’s Steam Input layout so the
+          game ignores it. A combo can still reach the game. Set Log level to Debug before a test. Not tested here
+          while a game is focused.
+        </div>
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <ButtonItem
+          layout="below"
+          onClick={() => {
+            if (recording) {
+              cancelProgramming();
+              setRecording(false);
+              setMessage("Cancelled.");
+              return;
+            }
+            setRecording(true);
+            setMessage("Hold the button or buttons.");
+            startProgramming((captured, reason) => {
+              setRecording(false);
+              if (reason === "timeout") {
+                setMessage("Nothing pressed. Cancelled.");
+                return;
+              }
+              if (reason !== "captured" || !captured || captured.length === 0) {
+                setMessage("Cancelled.");
+                return;
+              }
+              void save(captured);
+            });
+          }}
+        >
+          {recording ? "Cancel" : "Program button"}
+        </ButtonItem>
+      </PanelSectionRow>
+      {buttons.length > 0 && (
+        <PanelSectionRow>
           <ButtonItem
             layout="below"
-            onClick={() => void save(item, backButton, combo)}
+            onClick={() => {
+              cancelProgramming();
+              setRecording(false);
+              void save([]);
+            }}
           >
-            <div style={{ textAlign: "left" }}>
-              <div style={{ fontWeight: mode === item ? 700 : 400 }}>
-                {item === "off" ? "Off" : item === "back" ? "One back button" : "Button combo"}
-              </div>
-              <div style={{ opacity: 0.75, fontSize: "0.85em" }}>{mode === item ? "Selected" : "Tap to use"}</div>
-            </div>
+            Clear
           </ButtonItem>
         </PanelSectionRow>
-      ))}
-      {mode === "back" && (
-        <>
-          {(["L4", "L5", "R4", "R5"] as const).map((button) => (
-            <PanelSectionRow key={button}>
-              <ButtonItem layout="below" onClick={() => void save("back", button, combo)}>
-                <div style={{ textAlign: "left" }}>
-                  <div style={{ fontWeight: backButton === button ? 700 : 400 }}>{button}</div>
-                  <div style={{ opacity: 0.75, fontSize: "0.85em" }}>
-                    {backButton === button ? "Selected — one press toggles play/pause" : "Tap to select"}
-                  </div>
-                </div>
-              </ButtonItem>
-            </PanelSectionRow>
-          ))}
-        </>
-      )}
-      {mode === "combo" && (
-        <>
-          <PanelSectionRow>
-            <div style={{ whiteSpace: "normal", fontSize: "0.85em" }}>
-              Pick at least two buttons, or hold them and tap “Use the buttons I’m holding”. View/Select is a better
-              partner than a face button the game already uses. Holding Steam may also open the overlay.
-            </div>
-          </PanelSectionRow>
-          {["Select", "Start", "Y", "X", "B", "A", "L1", "R1", "Steam"].map((button) => {
-            const on = combo.includes(button);
-            return (
-              <PanelSectionRow key={button}>
-                <ButtonItem
-                  layout="below"
-                  onClick={() => {
-                    const next = on ? combo.filter((name) => name !== button) : combo.concat(button);
-                    setCombo(next);
-                  }}
-                >
-                  <div style={{ textAlign: "left" }}>
-                    <div style={{ fontWeight: on ? 700 : 400 }}>{button === "Select" ? "View / Select" : button}</div>
-                    <div style={{ opacity: 0.75, fontSize: "0.85em" }}>{on ? "In the combo" : "Tap to add"}</div>
-                  </div>
-                </ButtonItem>
-              </PanelSectionRow>
-            );
-          })}
-          <PanelSectionRow>
-            <ButtonItem
-              layout="below"
-              onClick={() => {
-                if (recording) {
-                  setRecording(false);
-                  setComboRecording(false, null);
-                  return;
-                }
-                setRecording(true);
-                setHeld([]);
-                setComboRecording(true, (buttons) => setHeld(buttons));
-              }}
-            >
-              {recording ? "Stop listening for buttons" : "Listen for the buttons I’m holding"}
-            </ButtonItem>
-          </PanelSectionRow>
-          {recording && (
-            <PanelSectionRow>
-              <div style={{ whiteSpace: "normal" }}>
-                {held.length > 0 ? `Holding: ${held.join(" + ")}` : "Hold the buttons, then save."}
-              </div>
-            </PanelSectionRow>
-          )}
-          <PanelSectionRow>
-            <ButtonItem
-              layout="below"
-              onClick={() => {
-                const next = held.length >= 2 ? held : combo;
-                setComboRecording(false, null);
-                setRecording(false);
-                void save("combo", backButton, next);
-              }}
-            >
-              {held.length >= 2 ? "Use the buttons I’m holding" : "Save this combo"}
-            </ButtonItem>
-          </PanelSectionRow>
-          <PanelSectionRow>
-            <div style={{ whiteSpace: "normal", fontSize: "0.85em" }}>
-              {combo.length >= 2 ? `Combo: ${combo.join(" + ")}. Hold them together briefly.` : "Pick two buttons."}
-            </div>
-          </PanelSectionRow>
-        </>
       )}
       {message && (
         <PanelSectionRow>
@@ -829,6 +772,7 @@ function SettingsView({
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [logLevel, setLogLevelIndex] = useState(2);
 
   async function loadLibraries(url: string, suppliedToken = "") {
     const result = await testConnection(url, suppliedToken);
@@ -856,6 +800,11 @@ function SettingsView({
         setUsername(settings.username);
         setAuthMethod(settings.auth_method);
         setLibraryKey(settings.library_key);
+        const levelName = settings.log_level || "info";
+        setClientLogLevel(levelName);
+        setLogLevelIndex(["error", "warning", "info", "debug"].indexOf(levelName) >= 0
+          ? ["error", "warning", "info", "debug"].indexOf(levelName)
+          : 2);
         if (settings.has_token && settings.server_url) {
           await loadLibraries(settings.server_url);
         } else if (settings.auth_method === "link" && settings.signed_in) {
@@ -1204,6 +1153,36 @@ function SettingsView({
           </PanelSectionRow>
         </PanelSection>
       )}
+      <PanelSection title="Log">
+        <PanelSectionRow>
+          <SliderField
+            label="Log level"
+            description="Debug records controller button presses. Use Debug for a shortcut test, then set it back to Info."
+            value={logLevel}
+            min={0}
+            max={3}
+            step={1}
+            notchCount={4}
+            notchTicksVisible={true}
+            notchLabels={[
+              { label: "Error", notchIndex: 0, value: 0 },
+              { label: "Warning", notchIndex: 1, value: 1 },
+              { label: "Info", notchIndex: 2, value: 2 },
+              { label: "Debug", notchIndex: 3, value: 3 },
+            ]}
+            onChange={(value) => {
+              const index = Math.max(0, Math.min(3, Math.round(value)));
+              const name = (["error", "warning", "info", "debug"] as const)[index];
+              setLogLevelIndex(index);
+              void (async () => {
+                await setLogLevel(name);
+                setClientLogLevel(name);
+                if (name === "debug") replayRegistrationLog();
+              })();
+            }}
+          />
+        </PanelSectionRow>
+      </PanelSection>
     </>
   );
 }

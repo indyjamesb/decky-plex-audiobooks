@@ -19,9 +19,8 @@ export interface Settings {
   speed: number;
   volume: number;
   book_sort: string;
-  play_pause_mode: "off" | "back" | "combo" | string;
-  play_pause_back: string;
-  play_pause_combo: string[];
+  play_pause_buttons: string[];
+  log_level: string;
 }
 
 export interface PlexServerChoice {
@@ -122,10 +121,10 @@ export const saveSettings = callable<
 export const testConnection = callable<[serverUrl: string, token: string], ConnectionResult>("test_connection");
 export const listBooks = callable<[query: string, start: number, sortId: string], BookListResult>("list_books");
 export const setBookSort = callable<[sortId: string], ActionResult & { book_sort?: string }>("set_book_sort");
-export const setPlayPauseTrigger = callable<
-  [mode: string, backButton: string, combo: string[]],
-  ActionResult & { play_pause_mode?: string; play_pause_back?: string; play_pause_combo?: string[] }
->("set_play_pause_trigger");
+export const setPlayPauseButtons = callable<[buttons: string[]], ActionResult & { play_pause_buttons?: string[] }>(
+  "set_play_pause_buttons",
+);
+export const setLogLevel = callable<[level: string], ActionResult & { log_level?: string }>("set_log_level");
 export const getBook = callable<[albumKey: string], BookDetail>("get_book");
 export const playBook = callable<[albumKey: string, trackIndex: number, offsetMs: number], ActionResult>("play_book");
 export const togglePlayback = callable<[], ActionResult>("toggle_playback");
