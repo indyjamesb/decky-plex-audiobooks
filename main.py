@@ -22,7 +22,7 @@ from progress import (
     choose_resume,
     normalize_book_sort,
     normalize_log_level,
-    play_pause_binding,
+    play_pause_actions,
     playback_outcome,
     previous_target,
     reported_position_ms,
@@ -32,7 +32,7 @@ from progress import (
     track_is_complete,
 )
 
-VERSION = "0.1.2"
+VERSION = "0.1.3"
 REPORT_INTERVAL_S = 15
 _PY_LOG_LEVELS = {
     "error": logging.ERROR,
@@ -56,7 +56,7 @@ DEFAULTS = {
     "speed": 1.0,
     "volume": 80,
     "book_sort": "recently_played",
-    "play_pause_buttons": [],
+    "play_pause_actions": [],
     "log_level": "info",
 }
 
@@ -150,11 +150,7 @@ class Plugin:
                 if key in loaded:
                     merged[key] = loaded[key]
             merged["log_level"] = normalize_log_level(merged.get("log_level"))
-            # 0.1.1 stored mode/back/combo. Prefer an explicit button list.
-            if "play_pause_buttons" not in loaded:
-                merged["play_pause_buttons"] = play_pause_binding(loaded)
-            else:
-                merged["play_pause_buttons"] = play_pause_binding(merged)
+            merged["play_pause_actions"] = play_pause_actions(loaded)
             self.settings = merged
         except Exception:
             # The file contains the token. Do not log the parse error or the body.
@@ -221,7 +217,7 @@ class Plugin:
             "speed": speed,
             "volume": int(self.settings.get("volume") if self.settings.get("volume") is not None else 80),
             "book_sort": normalize_book_sort(self.settings.get("book_sort")),
-            "play_pause_buttons": play_pause_binding(self.settings),
+            "play_pause_actions": play_pause_actions(self.settings),
             "log_level": normalize_log_level(self.settings.get("log_level")),
         }
 
@@ -251,18 +247,18 @@ class Plugin:
         now = time.monotonic()
         recent = [stamp for stamp in self._frontend_log_times if now - stamp < 60]
         self._frontend_log_times = recent
-        if len(recent) >= 80 or sum(1 for stamp in recent if now - stamp < 1) >= 6:
+        if len(recent) >= 200 or sum(1 for stamp in recent if now - stamp < 1) >= 20:
             return {"success": True, "logged": False}
         self._frontend_log_times.append(now)
         decky.logger.log(_PY_LOG_LEVELS[name], "frontend: %s", text)
         return {"success": True, "logged": True}
 
     async def set_play_pause_buttons(self, buttons: list):
-        cleaned = play_pause_binding({"play_pause_buttons": buttons if isinstance(buttons, list) else []})
-        self.settings["play_pause_buttons"] = cleaned
+        cleaned = play_pause_actions({"play_pause_actions": buttons if isinstance(buttons, list) else []})
+        self.settings["play_pause_actions"] = cleaned
         await self._save_settings()
-        decky.logger.info("Play/pause binding set to %s", "+".join(cleaned) or "not set")
-        return {"success": True, "play_pause_buttons": cleaned}
+        decky.logger.info("Play/pause binding set to %s", "+".join(str(code) for code in cleaned) or "not set")
+        return {"success": True, "play_pause_actions": cleaned}
 
     async def save_settings(self, server_url: str, token: str, library_key: str, library_title: str, track_progress):
         url = normalize_server_url(server_url)

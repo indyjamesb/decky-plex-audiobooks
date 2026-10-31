@@ -260,10 +260,29 @@ def compute_position_ms(
 
 BOOK_SORTS = ("recently_played", "title", "author", "recently_added")
 LOG_LEVELS = ("error", "warning", "info", "debug")
-PLAY_PAUSE_BUTTONS = (
-    "Select", "Start", "Steam", "A", "B", "X", "Y", "L1", "R1", "L3", "R3",
-    "L4", "L5", "R4", "R5",
-)
+# Names used by 0.1.1/0.1.2 settings, mapped onto ControllerInputGamepadButton
+# in @decky/ui. R4 = 45 was confirmed on a Steam Deck (Oct 31 2026). The other
+# codes follow that enum: RBACK_UPPER is 45, so LBACK_UPPER is 44 (L4), and
+# LBACK/RBACK are 32/33 (L5/R5).
+PLAY_PAUSE_NAME_TO_ACTION = {
+    "A": 0,
+    "B": 1,
+    "X": 2,
+    "Y": 3,
+    "L3": 25,
+    "L2": 28,
+    "R2": 29,
+    "L1": 30,
+    "R1": 31,
+    "L5": 32,
+    "R5": 33,
+    "Steam": 34,
+    "Select": 35,
+    "Start": 36,
+    "R3": 41,
+    "L4": 44,
+    "R4": 45,
+}
 
 
 def normalize_log_level(level: object) -> str:
@@ -271,13 +290,17 @@ def normalize_log_level(level: object) -> str:
     return text if text in LOG_LEVELS else "info"
 
 
-def play_pause_binding(settings: dict) -> list[str]:
-    """Current binding, migrating 0.1.1 mode/back/combo settings.
+def play_pause_actions(settings: dict) -> list[int]:
+    """Saved play/pause action codes.
 
-    An empty list means play/pause is not bound.
+    Prefers ``play_pause_actions``. Otherwise migrates 0.1.2 names
+    (``R4`` becomes 45) and 0.1.1 mode/back/combo settings. An empty list
+    means the shortcut is off.
     """
 
-    raw = settings.get("play_pause_buttons")
+    raw = settings.get("play_pause_actions")
+    if not isinstance(raw, list):
+        raw = settings.get("play_pause_buttons")
     if not isinstance(raw, list):
         mode = str(settings.get("play_pause_mode") or "off")
         if mode == "back":
@@ -286,11 +309,20 @@ def play_pause_binding(settings: dict) -> list[str]:
             raw = settings.get("play_pause_combo") or []
         else:
             raw = []
-    cleaned: list[str] = []
+    cleaned: list[int] = []
     for item in raw:
-        name = str(item)
-        if name in PLAY_PAUSE_BUTTONS and name not in cleaned:
-            cleaned.append(name)
+        code: int | None
+        if isinstance(item, bool):
+            continue
+        if isinstance(item, int):
+            code = item
+        elif isinstance(item, str) and item.strip().lstrip("-").isdigit():
+            code = int(item.strip())
+        else:
+            code = PLAY_PAUSE_NAME_TO_ACTION.get(str(item))
+        if code is None or code < 0 or code > 60 or code in cleaned:
+            continue
+        cleaned.append(code)
     return cleaned
 
 PLEX_SORT = {

@@ -648,7 +648,7 @@ function BookView({
 }
 
 function PlayPauseTrigger() {
-  const [buttons, setButtons] = useState<string[]>([]);
+  const [buttons, setButtons] = useState<number[]>([]);
   const [recording, setRecording] = useState(false);
   const [message, setMessage] = useState("");
 
@@ -657,7 +657,7 @@ function PlayPauseTrigger() {
     void getSettings()
       .then((settings) => {
         if (stop) return;
-        const next = settings.play_pause_buttons || [];
+        const next = settings.play_pause_actions || [];
         setButtons(next);
         setShortcutButtons(next);
         setClientLogLevel(settings.log_level || "info");
@@ -669,13 +669,13 @@ function PlayPauseTrigger() {
     };
   }, []);
 
-  async function save(next: string[]) {
+  async function save(next: number[]) {
     const result = await setPlayPauseButtons(next);
     if (!result.success) {
       setMessage(result.message || "Couldn't save that button.");
       return;
     }
-    const saved = result.play_pause_buttons || next;
+    const saved = result.play_pause_actions || next;
     setButtons(saved);
     setShortcutButtons(saved);
     setMessage(saved.length ? `Play/pause: ${bindingLabel(saved)}` : "Play/pause: Not set");
@@ -690,10 +690,10 @@ function PlayPauseTrigger() {
       </PanelSectionRow>
       <PanelSectionRow>
         <div style={{ whiteSpace: "normal", fontSize: "0.85em" }}>
-          Program button, then press and hold one button or several together. One button toggles on press. Two or
-          more must be held together briefly. Leave a back button unbound in the game’s Steam Input layout so the
-          game ignores it. A combo can still reach the game. Set Log level to Debug before a test. Not tested here
-          while a game is focused.
+          Program button, then press one button or hold several together on the same controller. One button toggles
+          on press. A combo must all be held briefly. An unknown code shows as Button N. Leave a back button unbound
+          in the game’s Steam Input layout; a combo can still reach the game. Checked on the Steam menu only, not in
+          a game and not with a Bluetooth pad. Set Log level to Debug before a test.
         </div>
       </PanelSectionRow>
       <PanelSectionRow>

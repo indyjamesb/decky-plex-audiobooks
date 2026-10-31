@@ -19,7 +19,7 @@ export interface Settings {
   speed: number;
   volume: number;
   book_sort: string;
-  play_pause_buttons: string[];
+  play_pause_actions: number[];
   log_level: string;
 }
 
@@ -121,7 +121,7 @@ export const saveSettings = callable<
 export const testConnection = callable<[serverUrl: string, token: string], ConnectionResult>("test_connection");
 export const listBooks = callable<[query: string, start: number, sortId: string], BookListResult>("list_books");
 export const setBookSort = callable<[sortId: string], ActionResult & { book_sort?: string }>("set_book_sort");
-export const setPlayPauseButtons = callable<[buttons: string[]], ActionResult & { play_pause_buttons?: string[] }>(
+export const setPlayPauseButtons = callable<[buttons: number[]], ActionResult & { play_pause_actions?: number[] }>(
   "set_play_pause_buttons",
 );
 export const setLogLevel = callable<[level: string], ActionResult & { log_level?: string }>("set_log_level");

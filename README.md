@@ -9,13 +9,13 @@ Version 0.1 is a small player. One server, one library, browse and search, backg
 Build the zip on a computer (or on the Deck, if Node is installed), then copy it over. Decky does not need its plugin store for this.
 
 1. Install [Decky Loader](https://decky.xyz/) if it is not already installed.
-2. Copy `release/plex-audiobooks-v0.1.2.zip` to the Deck. The zip in this repository is already built.
+2. Copy `release/plex-audiobooks-v0.1.3.zip` to the Deck. The zip in this repository is already built.
 3. In Desktop Mode, or over SSH:
 
 ```bash
 mkdir -p ~/homebrew/plugins
 cd ~/homebrew/plugins
-unzip -o /path/to/plex-audiobooks-v0.1.2.zip
+unzip -o /path/to/plex-audiobooks-v0.1.3.zip
 ```
 
 The zip already contains a `plex-audiobooks` folder. You should end up with:
@@ -46,7 +46,7 @@ pnpm test
 pnpm run package
 ```
 
-`pnpm test` runs the Python unit tests. `pnpm run package` writes `release/plex-audiobooks-v0.1.2.zip`.
+`pnpm test` runs the Python unit tests. `pnpm run package` writes `release/plex-audiobooks-v0.1.3.zip`.
 
 `pnpm run build` only produces `dist/index.js`. A manual install without the zip is the plugin directory containing `dist/`, `main.py`, `player.py`, `plex.py`, `plex_auth.py`, `progress.py`, `plugin.json`, `package.json`, `LICENSE`, `NOTICE`, and `README.md`.
 
@@ -87,7 +87,8 @@ With that setting on, a position from another Plex audiobook app showed up in Pl
 - **Speed** moves in steps of 0.05 from 0.50x to 3.00x, so 1.20x is a real step. The last speed is saved. Changing it restarts the file at the current position.
 - **Volume** is the audiobook only. On SteamOS it is applied with `pactl` when that exists. Otherwise it is applied the next time a file starts.
 - The book bar is your place in the whole book. The chapter bar is your place in the current file.
-- **Play/pause button** starts as not set. **Program button**, then press and hold one button or several together. Releasing them (or holding them for a moment) saves that set. One button toggles on press. Two or more must be held together briefly. **Clear** turns it off. Leave a back button unbound in that game’s Steam Input layout so the game ignores it. A combo can still reach the game. Touchpad and stick touches are ignored. This uses `window.SteamClient.Input.RegisterForControllerStateChanges`, called the same way as [Decky Recorder](https://github.com/SDH-Stewardship/decky-recorder-fork) and [MagicPods](https://github.com/steam3d/MagicPodsDecky). L4 and R4 are upper-word bits. It has not been tested here on hardware.
+- **Play/pause button** starts as not set. **Program button**, then press one button or hold several together on the same controller (the Deck or whichever pad is sending events). Releasing them, or holding them for a moment, saves that set. One button toggles on press. Two or more must all be held briefly. **Clear** turns it off. A saved name from 0.1.2 is converted: `R4` becomes action 45. The panel shows a name from Steam’s `ControllerInputGamepadButton` list in `@decky/ui` (A, B, X, Y, L1, R1, L4, R4, Steam, Select, and so on). An unknown code shows as `Button N`. Only action 45 was confirmed on hardware, as the Deck’s R4, on the Steam menu with no game running. L4 is 44, L5 is 32, and R5 is 33 in that same list; those three were not pressed in the hardware check. Touchpad and stick directions are ignored so they are not saved as a shortcut. Leave a back button unbound in that game’s Steam Input layout so the game ignores it. A combo can still reach the game. If the combo includes Steam, the plugin asks Steam to suppress the Quick Access Menu for that hold. Set **Log level** to Debug before a test.
+- The listener is `SteamClient.Input.RegisterForControllerInputMessages`. On the Steam client from Oct 31 2026 (Chrome/126.0.6478.183) `RegisterForControllerStateChanges` is gone, which is why 0.1.2 logged `frontend: controller registration exists=undefined`. The old callback is used only if that function is still present. Each Debug callback line looks like `frontend: controller callback controller=15 action=45 pressed=true name=R4`. A successful hook looks like `frontend: controller registration succeeded api=RegisterForControllerInputMessages`. [MagicPods](https://github.com/steam3d/MagicPodsDecky)’s installed build still calls the removed function, so it does not see buttons on this client either.
 - **Log level** is a slider in settings (Error, Warning, Info, Debug), saved, default Info, same idea as MagicPods’ log-level slider. Controller diagnostics are Debug only. For a shortcut test, set Log level to Debug. Lines are written to `~/homebrew/logs/plex-audiobooks/plugin.log` with a `frontend:` prefix. Debug logging is for this test; leave it on Info afterwards.
 
 ### Progress sync
@@ -120,7 +121,9 @@ Sign-in and playback were confirmed on a Steam Deck outside this environment. Th
 - Sleep. When the Deck sleeps, playback stops. Nothing in this plugin keeps the device awake.
 - Bluetooth output, remote Plex URLs, and HTTPS servers with a private certificate. The client verifies HTTPS certificates.
 - Embedded chapters inside one `.m4b`. Next and previous follow Plex tracks. If Plex shows the book as one file, there is one chapter.
-- The play/pause button while a game is focused, and from an external Steam Controller while the Deck is docked. The code listens to `SteamClient.Input.RegisterForControllerStateChanges` (the callback MagicPods and Decky Recorder use, including L4/R4 in `ulUpperButtons`). This environment cannot open Game Mode.
+- The play/pause button while a game is focused. The Oct 31 2026 check was on the Steam menu with no game running. It is also unknown whether a button left unbound in a game’s Steam Input layout still emits an action code.
+- Bluetooth Xbox and PlayStation controllers. The shortcut matches a combo on one controller index and Program button accepts whichever controller pressed, but no external pad was attached for that check.
+- Action names other than R4 (action 45). The other labels follow `ControllerInputGamepadButton` in `@decky/ui`. A mixed press on the Deck also produced actions 31, 1, 23, and 21, which that list calls R1, B, left-stick right, and left-stick down. Those names were not confirmed by pressing only that control.
 - Position accuracy during a long stream. The position is wall-clock time since ffplay started, times the speed, plus the seek point. If the stream buffers, the bar can run ahead of the audio. Seeking restarts ffplay, so there is a short gap.
 - Live volume when `pactl` is missing.
 
