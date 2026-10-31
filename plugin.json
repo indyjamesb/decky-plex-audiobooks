@@ -1,0 +1,11 @@
+{
+  "name": "Plex Audiobooks",
+  "author": "decky-plex-audiobooks",
+  "version": "0.5.2",
+  "flags": [],
+  "api_version": 1,
+  "publish": {
+    "tags": ["audio", "utility"],
+    "description": "Play audiobooks from your Plex server in the background while a game is running, and save your place to Plex."
+  }
+}

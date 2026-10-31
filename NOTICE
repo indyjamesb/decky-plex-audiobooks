@@ -1,0 +1,55 @@
+Third-party approaches this plugin learned from. The playback and progress
+code in this repository was written for this project. It is not a copy of the
+projects below.
+
+Museck
+  https://github.com/Nezreka/Museck
+  Copyright (c) 2025
+  MIT License
+  Background audio in Game Mode: spawn ffplay (not the Steam web view) and
+  point it at the desktop user's Pulse/PipeWire socket, with a child
+  environment that does not inherit Decky's bundled library path. That is the
+  approach used here. Museck's MIT license is reproduced below because the
+  design is taken from that project.
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
+Music Assistant server, Plex provider
+  https://github.com/music-assistant/server
+  Apache License 2.0
+  Pull request 3748 (zenibako) describes audiobook resume as the per-track
+  Plex viewOffset on the furthest file, plus the durations of the files before
+  it, written back with the timeline API. This plugin uses that model. No
+  Music Assistant source is included. The Apache-2.0 license applies to Music
+  Assistant itself: https://www.apache.org/licenses/LICENSE-2.0
+
+Chronicle
+  https://github.com/mattttvaughn/chronicle
+  GNU General Public License v3.0
+  Read only, to confirm that Plex's timeline `time` and `playbackTime` fields
+  are milliseconds of progress (a unix timestamp is rejected) and that a
+  finished file is marked with the scrobble endpoint. No Chronicle source is
+  included. This plugin is not a derivative work of Chronicle and is not GPL.
+
+decky-plugin-template
+  https://github.com/SteamDeckHomebrew/decky-plugin-template
+  BSD-3-Clause License
+  Copyright (c) 2022-2024, Steam Deck Homebrew
+  The repository layout, rollup config, and decky.pyi stub follow that
+  template. decky.pyi retains the template's BSD-3-Clause header.
