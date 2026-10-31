@@ -45,12 +45,21 @@ def truthy(value: object, default: bool = True) -> bool:
 
 
 class SinkInput:
-    def __init__(self, index: str, name: str, binary: str, pid: str, volumes: list[int]):
+    def __init__(
+        self,
+        index: str,
+        name: str,
+        binary: str,
+        pid: str,
+        volumes: list[int],
+        percents: list[int] | None = None,
+    ):
         self.index = index
         self.name = name
         self.binary = binary
         self.pid = pid
         self.volumes = volumes
+        self.percents = percents or []
 
     @property
     def binary_name(self) -> str:
@@ -68,11 +77,11 @@ def parse_sink_inputs(listing: str) -> list[SinkInput]:
         index = lines[0].strip().split()[0]
         if not index.isdigit():
             continue
-        volumes = _volumes_from_block(lines[1:])
+        volumes, percents = _volumes_from_block(lines[1:])
         name = _prop(raw, "application.name")
         binary = _prop(raw, "application.process.binary")
         pid = _prop(raw, "application.process.id")
-        streams.append(SinkInput(index, name, binary, pid, volumes))
+        streams.append(SinkInput(index, name, binary, pid, volumes, percents))
     return streams
 
 
@@ -81,7 +90,7 @@ def _prop(block: str, key: str) -> str:
     return match.group(1) if match else ""
 
 
-def _volumes_from_block(lines: list[str]) -> list[int]:
+def _volumes_from_block(lines: list[str]) -> tuple[list[int], list[int]]:
     collected: list[str] = []
     capture = False
     for line in lines:
@@ -95,12 +104,20 @@ def _volumes_from_block(lines: list[str]) -> list[int]:
         if _PROP.match(stripped) and not _VOLUME_PART.match(stripped):
             break
         collected.append(stripped)
-    found: list[int] = []
-    for _channel, raw, _percent in _VOLUME_PART.findall(" ".join(collected)):
-        found.append(int(raw))
-        if len(found) == 12:
+    raws: list[int] = []
+    percents: list[int] = []
+    for _channel, raw, percent in _VOLUME_PART.findall(" ".join(collected)):
+        raws.append(int(raw))
+        percents.append(int(percent))
+        if len(raws) == 12:
             break
-    return found
+    return raws, percents
+
+
+def at_percent(stream: SinkInput, percent: int) -> bool:
+    """True when every reported channel is exactly this percent."""
+
+    return bool(stream.percents) and all(value == percent for value in stream.percents)
 
 
 def is_own_stream(stream: SinkInput, own_pids: set[str]) -> bool:
@@ -154,9 +171,9 @@ def plan_volumes(
     """Decide pactl changes.
 
     While the book plays and ducking is on, other streams go to the lower of
-    ``duck_level`` and ``game_volume``. Pause, stop, and a game volume of 100
-    put back the exact original channel values when we have them. A game
-    volume below 100, with the book paused, sets that percent instead.
+    ``duck_level`` and ``game_volume``. Otherwise a game volume of 100 sets
+    every other stream to 100% (one value, all channels). Below 100, that
+    percent is applied and the first-seen channel values stay saved.
     """
 
     saved = {name: list(values) for name, values in originals.items()}
@@ -169,9 +186,8 @@ def plan_volumes(
             actions.append(VolumePlan(stream.index, stream.name, playing_level(game_volume, duck_level, True), None))
             continue
         if game_volume >= 100:
-            raw = saved.get(stream.name) if stream.name else None
-            if raw:
-                actions.append(VolumePlan(stream.index, stream.name, None, list(raw)))
+            actions.append(VolumePlan(stream.index, stream.name, 100, None))
+            if stream.name:
                 forget.append(stream.name)
             continue
         if stream.name and stream.name not in saved and stream.volumes:
@@ -264,14 +280,65 @@ class GameMixer:
                 args = ["set-sink-input-volume", action.index, f"{int(action.percent)}%"]
             if self._call(args) is None:
                 ok = False
-        if apps != self.book.apps:
+        if ok and apps != self.book.apps:
             self.book.replace(apps)
         return ok
 
-    def restore_originals(self) -> bool:
-        """Put every stream we changed back to the saved channel values."""
+    def restore_on_exit(self, game_volume: int) -> bool:
+        """Put touched streams back, then drop them from the state file.
 
-        return self.sync(playing=False, own_pids=set(), game_volume=100, duck_level=100, auto_lower=False)
+        A saved original is written back per channel. A touched name with no
+        saved values is set to ``game_volume``. The file is rewritten only
+        after every pactl call for a live stream succeeds. Names that are not
+        currently playing stay in the file.
+        """
+
+        listing = self._call(["list", "sink-inputs"])
+        if listing is None:
+            return False
+        remaining = {name: list(values) for name, values in self.book.apps.items()}
+        ok = True
+        for stream in controllable_streams(parse_sink_inputs(listing), set()):
+            if not stream.name or stream.name not in self.book.apps:
+                continue
+            raw = self.book.apps.get(stream.name) or []
+            if raw:
+                args = ["set-sink-input-volume", stream.index, *[str(value) for value in raw]]
+            else:
+                args = ["set-sink-input-volume", stream.index, f"{int(game_volume)}%"]
+            if self._call(args) is None:
+                ok = False
+                continue
+            remaining.pop(stream.name, None)
+        if ok and remaining != self.book.apps:
+            self.book.replace(remaining)
+        return ok
+
+    def recover_stuck(self, *, game_volume: int, duck_level: int, own_pids: set[str]) -> int:
+        """Lift other apps left at the duck level when no original was saved."""
+
+        if self.book.apps:
+            return 0
+        listing = self._call(["list", "sink-inputs"])
+        if listing is None:
+            return 0
+        count = 0
+        for stream in controllable_streams(parse_sink_inputs(listing), own_pids):
+            if not at_percent(stream, duck_level):
+                continue
+            if self._call(["set-sink-input-volume", stream.index, f"{int(game_volume)}%"]) is None:
+                continue
+            count += 1
+            self._log(
+                "Game volume recovered %s from %s%% to %s%%"
+                % (stream.name or stream.index, duck_level, game_volume)
+            )
+        return count
+
+    def restore_originals(self) -> bool:
+        """Put every stream we changed back to the saved channel values, or to 100%."""
+
+        return self.restore_on_exit(100)
 
     def _call(self, args: list[str]) -> str | None:
         try:

@@ -6,6 +6,10 @@ Version 0.1 is a small player. One server, one library, browse and search, backg
 
 ## Changelog
 
+### 0.5.1
+
+Tested on Steam Deck OLED. Game volume 100 sets every other stream to 100%, including a 12-channel game stream left at the ducked level. A plugin restart stops an ffplay the previous instance left paused.
+
 ### 0.5.0
 
 First public release. Tested on Steam Deck OLED. Log level is a menu instead of a slider. If ffplay is missing, the panel says to install ffmpeg.
@@ -37,13 +41,13 @@ The shortcut used `RegisterForControllerInputMessages` after `RegisterForControl
 Build the zip on a computer (or on the Deck, if Node is installed), then copy it over. Decky does not need its plugin store for this.
 
 1. Install [Decky Loader](https://decky.xyz/) if it is not already installed.
-2. Copy `release/plex-audiobooks-v0.5.0.zip` to the Deck. The zip in this repository is already built.
+2. Copy `release/plex-audiobooks-v0.5.1.zip` to the Deck. The zip in this repository is already built.
 3. In Desktop Mode, or over SSH:
 
 ```bash
 mkdir -p ~/homebrew/plugins
 cd ~/homebrew/plugins
-unzip -o /path/to/plex-audiobooks-v0.5.0.zip
+unzip -o /path/to/plex-audiobooks-v0.5.1.zip
 ```
 
 The zip already contains a `plex-audiobooks` folder. You should end up with:
@@ -74,7 +78,7 @@ pnpm test
 pnpm run package
 ```
 
-`pnpm test` runs the Python unit tests. `pnpm run package` writes `release/plex-audiobooks-v0.5.0.zip`.
+`pnpm test` runs the Python unit tests. `pnpm run package` writes `release/plex-audiobooks-v0.5.1.zip`.
 
 `pnpm run build` only produces `dist/index.js`. A manual install without the zip is the plugin directory containing `dist/`, `main.py`, `deck_hid.py`, `game_audio.py`, `player.py`, `plex.py`, `plex_auth.py`, `progress.py`, `plugin.json`, `package.json`, `LICENSE`, `NOTICE`, and `README.md`.
 

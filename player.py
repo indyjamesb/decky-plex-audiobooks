@@ -21,6 +21,7 @@ import shutil
 import signal
 import subprocess
 import time
+import ctypes
 
 from progress import atempo_filters, compute_position_ms
 
@@ -67,6 +68,93 @@ def _bundle_tainted(entry: str) -> bool:
     if bundle and (entry == bundle or entry.startswith(bundle + os.sep)):
         return True
     return _BUNDLE_PATH.search(entry) is not None
+
+
+def _die_with_parent() -> None:
+    """Ask the kernel to signal this ffplay if the plugin process dies.
+
+    A paused ffplay is stopped with SIGSTOP, so it also has to be continued
+    before that signal is delivered. ``start_new_session`` keeps it out of
+    the plugin's process group.
+    """
+
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        # PR_SET_PDEATHSIG, SIGTERM
+        libc.prctl(1, signal.SIGTERM)
+    except (OSError, AttributeError):
+        pass
+
+
+def find_orphaned_ffplay(proc_root: str, keep_pids: set[int]) -> list[tuple[int, bool]]:
+    """ffplay processes started by this plugin that are not the current child.
+
+    Returns ``(pid, stopped)``. Stopped means /proc state T, the SIGSTOP pause.
+    """
+
+    found: list[tuple[int, bool]] = []
+    try:
+        names = os.listdir(proc_root)
+    except OSError:
+        return found
+    for name in names:
+        if not name.isdigit():
+            continue
+        pid = int(name)
+        if pid in keep_pids:
+            continue
+        try:
+            with open(os.path.join(proc_root, name, "cmdline"), "rb") as handle:
+                raw = handle.read()
+        except OSError:
+            continue
+        text = raw.replace(b"\x00", b" ").decode("utf-8", errors="replace")
+        if "ffplay" not in text or "PlexAudiobooks/" not in text:
+            continue
+        stopped = False
+        try:
+            with open(os.path.join(proc_root, name, "status"), "r", encoding="utf-8", errors="replace") as handle:
+                for line in handle:
+                    if line.startswith("State:"):
+                        parts = line.split()
+                        stopped = len(parts) > 1 and parts[1].startswith("T")
+                        break
+        except OSError:
+            stopped = False
+        found.append((pid, stopped))
+    return found
+
+
+def stop_ffplay_pid(pid: int, stopped: bool, kill, still_alive) -> None:
+    """SIGCONT a stopped ffplay, then SIGTERM, then SIGKILL if it is still there."""
+
+    if stopped:
+        kill(pid, signal.SIGCONT)
+    kill(pid, signal.SIGTERM)
+    if still_alive(pid):
+        kill(pid, signal.SIGKILL)
+
+
+def reap_orphaned_ffplay(proc_root: str, keep_pids: set[int], log, kill=None, still_alive=None) -> list[int]:
+    """Stop leftover plugin ffplay processes. Returns the pids that were signalled."""
+
+    killer = kill or os.kill
+
+    def alive(pid: int) -> bool:
+        if still_alive is not None:
+            return still_alive(pid)
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return False
+        return True
+
+    stopped_pids: list[int] = []
+    for pid, stopped in find_orphaned_ffplay(proc_root, keep_pids):
+        log("Stopping leftover ffplay pid %s" % pid)
+        stop_ffplay_pid(pid, stopped, killer, alive)
+        stopped_pids.append(pid)
+    return stopped_pids
 
 
 def _clean_path_list(value: str) -> str:
@@ -191,7 +279,7 @@ def build_ffplay_args(
     if filters:
         args.extend(["-af", ",".join(filters)])
     if url.startswith(("http://", "https://")):
-        args.extend(["-user_agent", "PlexAudiobooks/0.5.0"])
+        args.extend(["-user_agent", "PlexAudiobooks/0.5.1"])
         if headers:
             args.extend(["-headers", headers])
     args.append(url)
@@ -316,6 +404,8 @@ class Player:
                 stdout=subprocess.DEVNULL,
                 stderr=log_file,
                 env=self.env,
+                start_new_session=True,
+                preexec_fn=_die_with_parent,
             )
         self.started_at = time.monotonic()
         self.paused_total = 0.0

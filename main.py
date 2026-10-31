@@ -26,6 +26,7 @@ from player import (
     ffplay_missing_message,
     find_ffplay,
     find_pulse_socket,
+    reap_orphaned_ffplay,
     set_process_volume,
 )
 from plex import PlexClient, PlexError, normalize_server_url
@@ -56,7 +57,7 @@ from progress import (
     track_is_complete,
 )
 
-VERSION = "0.5.0"
+VERSION = "0.5.1"
 REPORT_INTERVAL_S = 10
 _PY_LOG_LEVELS = {
     "error": logging.ERROR,
@@ -159,6 +160,7 @@ class Plugin:
         if not ffplay:
             decky.logger.error("%s", FFPLAY_MISSING)
             self.last_error = FFPLAY_MISSING
+        reap_orphaned_ffplay("/proc", set(), lambda message: decky.logger.info("%s", message))
         self.player = Player(ffplay, os.path.join(log_dir, "ffplay.log"), env)
         self._game = GameMixer(
             lambda args: pactl_run(env, args),
@@ -166,6 +168,14 @@ class Plugin:
             lambda message: decky.logger.warning("%s", message),
         )
         self._install_game_restore_hook()
+        if self._game.book.apps:
+            self._game.restore_on_exit(clamp_percent(self.settings.get("game_volume"), 100))
+        else:
+            self._game.recover_stuck(
+                game_volume=clamp_percent(self.settings.get("game_volume"), 100),
+                duck_level=clamp_percent(self.settings.get("duck_level"), 30),
+                own_pids=set(),
+            )
         self._tick_task = asyncio.create_task(self._tick_loop())
         self._loop = asyncio.get_running_loop()
         self._hid = DeckHidWatcher(on_fire=self._schedule_shortcut, log_debug=self._hid_debug)
@@ -175,10 +185,12 @@ class Plugin:
         decky.logger.info("Plex Audiobooks %s loaded", VERSION)
 
     def _install_game_restore_hook(self) -> None:
+        atexit.register(self._stop_audio_process)
         atexit.register(self._restore_game_audio)
         previous = signal.getsignal(signal.SIGTERM)
 
         def _on_term(signum, frame):
+            self._stop_audio_process()
             self._restore_game_audio()
             if callable(previous) and previous not in (signal.SIG_DFL, signal.SIG_IGN):
                 previous(signum, frame)
@@ -188,14 +200,21 @@ class Plugin:
         except (OSError, ValueError):
             pass
 
+    def _stop_audio_process(self) -> None:
+        player = self.player
+        if player is not None:
+            player.stop()
+
     def _restore_game_audio(self) -> None:
         if self._game_restored or self._game is None:
             return
-        self._game_restored = True
         try:
-            self._game.restore_originals()
+            ok = self._game.restore_on_exit(clamp_percent(self.settings.get("game_volume"), 100))
         except Exception:
             decky.logger.warning("Could not restore game volume")
+            return
+        if ok:
+            self._game_restored = True
 
     def _own_ffplay_pids(self) -> set[str]:
         player = self.player
@@ -207,12 +226,12 @@ class Plugin:
         player = self.player
         return bool(player and player.process_alive() and not player.paused and self.tracks)
 
-    def _sync_game_audio(self) -> None:
+    def _sync_game_audio(self, force: bool = False) -> None:
         if self._game is None or self._game_restored:
             return
         playing = self._book_is_playing()
         game_volume = clamp_percent(self.settings.get("game_volume"), 100)
-        if not playing and game_volume >= 100 and not self._game.book.apps:
+        if not force and not playing and game_volume >= 100 and not self._game.book.apps:
             return
         self._game.sync(
             playing=self._book_is_playing(),
@@ -228,11 +247,11 @@ class Plugin:
         try:
             asyncio.get_running_loop().create_task(self._sync_game_soon())
         except RuntimeError:
-            self._sync_game_audio()
+            self._sync_game_audio(True)
 
     async def _sync_game_soon(self) -> None:
         try:
-            await _to_thread(self._sync_game_audio)
+            await _to_thread(self._sync_game_audio, True)
         except Exception:
             decky.logger.warning("Game volume change failed")
 

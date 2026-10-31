@@ -1,5 +1,6 @@
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
 import time
@@ -12,9 +13,11 @@ from player import (
     build_ffplay_args,
     ffplay_missing_message,
     find_ffplay,
+    find_orphaned_ffplay,
+    reap_orphaned_ffplay,
     redact_text,
+    stop_ffplay_pid,
 )
-
 
 class EnvTests(unittest.TestCase):
     def test_bundle_paths_and_unknown_variables_stay_out(self):
@@ -42,6 +45,39 @@ class EnvTests(unittest.TestCase):
 
 
 class FfplayLookupTests(unittest.TestCase):
+    def test_orphaned_plugin_ffplay_is_continued_then_killed(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._proc(root, "42", b"ffplay\x00-user_agent\x00PlexAudiobooks/0.5.0\x00", "T (stopped)")
+            self._proc(root, "7", b"ffplay\x00-user_agent\x00Chrome\x00", "S (sleeping)")
+            self._proc(root, "9", b"ffplay\x00-user_agent\x00PlexAudiobooks/0.5.1\x00", "S (sleeping)")
+            found = find_orphaned_ffplay(root, {9})
+            self.assertEqual(found, [(42, True)])
+            signals: list[tuple[int, int]] = []
+            alive = {"42": True}
+
+            def kill(pid, sig):
+                signals.append((pid, sig))
+                if sig == signal.SIGKILL:
+                    alive[str(pid)] = False
+
+            reap_orphaned_ffplay(root, {9}, lambda _message: None, kill=kill, still_alive=lambda pid: alive.get(str(pid), False))
+            self.assertEqual(signals[0], (42, signal.SIGCONT))
+            self.assertEqual(signals[1], (42, signal.SIGTERM))
+            self.assertEqual(signals[2], (42, signal.SIGKILL))
+
+    def test_stop_sequence_skips_continue_when_running(self):
+        signals: list[int] = []
+        stop_ffplay_pid(3, False, lambda _pid, sig: signals.append(sig), lambda _pid: False)
+        self.assertEqual(signals, [signal.SIGTERM])
+
+    def _proc(self, root: str, pid: str, cmdline: bytes, state: str) -> None:
+        folder = os.path.join(root, pid)
+        os.makedirs(folder)
+        with open(os.path.join(folder, "cmdline"), "wb") as handle:
+            handle.write(cmdline)
+        with open(os.path.join(folder, "status"), "w", encoding="utf-8") as handle:
+            handle.write(f"State:\t{state}\n")
+
     def test_missing_ffplay_has_a_panel_message(self):
         self.assertEqual(ffplay_missing_message(""), FFPLAY_MISSING)
         self.assertEqual(ffplay_missing_message("/usr/bin/ffplay"), "")
