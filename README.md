@@ -10,7 +10,7 @@ Features: one Plex server and library, browse and search, playback in the backgr
 
 ### 0.5.2
 
-Tested on Steam Deck OLED. After a reboot the plugin waits for PipeWire before starting ffplay. If audio is still down, the panel says so instead of blaming the Plex server.
+First public release. Tested on Steam Deck OLED. After a reboot the plugin waits for PipeWire before starting ffplay. If audio is still down, the panel says so instead of blaming the Plex server.
 
 ### 0.5.1
 
@@ -18,7 +18,7 @@ Tested on Steam Deck OLED. Game volume 100 sets every other stream to 100%, incl
 
 ### 0.5.0
 
-First public release. Tested on Steam Deck OLED. Log level is a menu instead of a slider. If ffplay is missing, the panel says to install ffmpeg.
+Tested on Steam Deck OLED. Log level is a menu instead of a slider. If ffplay is missing, the panel says to install ffmpeg.
 
 ### 0.1.6
 
@@ -26,13 +26,13 @@ Tested on Steam Deck OLED. A Game volume slider sets other application streams, 
 
 ### 0.1.5
 
-Tested on Steam Deck OLED. Play/pause still defaults to R4, and that name now means the Deck R4 or the Steam Controller right back button. Hidraw also reads an Xbox Wireless Controller over Bluetooth, a DualSense over Bluetooth, and a Switch Pro Controller over USB. A book page shows Resume and Chapters. The plugin keeps every Plex connection for the chosen server and fails over from local to remote to relay without asking. Requests to plex.tv and the media server identify this player from DMI (product "Plex Audiobooks for <device>", version, a client id saved once) and report `GET /:/timeline` about every 10 seconds and on play, pause, seek, and stop. That session display has not been checked against a real Plex server yet.
+Tested on Steam Deck OLED. Play/pause still defaults to R4, and that name now means the Deck R4 or the Steam Controller right back button. Hidraw also reads an Xbox Wireless Controller over Bluetooth, a DualSense over Bluetooth, and a Switch Pro Controller over USB. A book page shows Resume and Chapters. The plugin keeps every Plex connection for the chosen server and fails over from local to remote to relay without asking. Requests to plex.tv and the media server identify this player from DMI (product "Plex Audiobooks for <device>", version, a client id saved once) and report `GET /:/timeline` about every 10 seconds and on play, pause, seek, and stop. Plex Dashboard shows it under Now Playing.
 
 The store listing stays "for Steam Deck". On the device, `X-Plex-Device` and `X-Plex-Model` follow DMI. Valve Galileo maps to "Steam Deck OLED"; that mapping is device-verified. Valve Jupiter ("Steam Deck" LCD), Legion Go, Legion Go S, ROG Ally, ROG Ally X, and MSI Claw are published DMI names and were not checked on those devices. If DMI cannot be read, the name is "Linux Handheld".
 
 Device-verified on a Steam Deck OLED, Oct 31 2026: Deck L4/R4, Steam Controller back buttons (28DE:1304 report 0x42), Xbox Wireless Controller Bluetooth (045E:0B13), DualSense Bluetooth (054C:0CE6 report 0x31), Switch Pro Controller USB (057E:2009 report 0x30).
 
-Not captured, so untested: DualSense USB (report 0x01, buttons one byte earlier), Switch Pro Controller over Bluetooth (same 0x30 report), the generic evdev gamepad path, and any Steam Controller button other than the two back buttons. The LCD Deck (Jupiter) DMI mapping and the other handheld names are untested. Dashboard Now Playing for this player is also untested until it is tried on a real server.
+Not captured, so untested: DualSense USB (report 0x01, buttons one byte earlier), Switch Pro Controller over Bluetooth (same 0x30 report), the generic evdev gamepad path, and any Steam Controller button other than the two back buttons. The LCD Deck (Jupiter) DMI mapping and the other handheld names are untested.
 
 ### 0.1.4
 
@@ -138,10 +138,12 @@ With **Store track progress** on, this plugin writes your place in each chapter 
 - Playback is an `ffplay` process started by the Python backend. Closing the Quick Access Menu does not stop it, and a focused game does not stop it, as long as the Deck stays awake.
 - **Pause**, **stop**, **-30s**, **+30s**, **previous**, and **next** are in the panel. Previous restarts the current file once you are a few seconds in; from the start of a file it goes back one file. Next marks the current file played in Plex and starts the next one.
 - **Speed** moves in steps of 0.05 from 0.50x to 3.00x, so 1.20x is a real step. The last speed is saved. Changing it restarts the file at the current position.
-- **Volume** is the audiobook only. On SteamOS it is applied with `pactl` when that exists. Otherwise it is applied the next time a file starts.
+- **Book volume** is the audiobook only. On SteamOS it is applied with `pactl` when that exists. Otherwise it is applied the next time a file starts.
+- **Game volume** sets every other app's audio, such as the game, without touching the book. 100 is full volume.
+- **Lower game while book plays** turns the game down to the **Lowered game volume** level while the book plays, and puts it back when you pause or stop. Book and game audio go to whatever output the Deck is using: speakers, Bluetooth headphones, or the dock.
 - The book bar is your place in the whole book. The chapter bar is your place in the current file.
-- **Play/pause button** defaults to R4, including while a game is focused. The backend reads the Deck controller at `/dev/hidraw` (USB `28DE:1205`) and toggles playback itself, so it still works after the Quick Access Menu closes. One button fires on press. A combo fires when those buttons are held together. Repeats inside 400 ms are ignored. **Clear** turns it off. **Program button** waits until every button is up, then records the next press (release, or about 2 seconds from the first press). The A press that opens Program is not saved. The panel shows the result, for example `R4` or `L4 + R4`, and **Cancel** aborts. Leave a back button unbound in that game’s Steam Input layout; a combo can still reach the game. Touch bits are ignored.
-- L4 (byte 13 bit `0x02`) and R4 (byte 13 bit `0x04`) were captured in a game. Other names follow Linux `drivers/hid/hid-steam.c` (`steam_do_deck_input_event`) and SDL `SDL_hidapi_steamdeck.c` (`SteamDeckButtons`). Those other names were not pressed in that capture. Set **Log level** to Debug. Lines look like `hidraw nodes hidraw2`, `hidraw input hidraw2`, `hidraw buttons R4`, and `hidraw shortcut fire R4`. Each toggle also writes one Info line: `Shortcut toggled playback (hidraw)`.
+- **Play/pause button** defaults to R4, including while a game is focused. The backend reads the controller at `/dev/hidraw` (the Deck's built-in controller, a Steam Controller, an Xbox Wireless Controller or DualSense over Bluetooth, or a Switch Pro Controller over USB) and toggles playback itself, so it still works after the Quick Access Menu closes. One button fires on press. A combo fires when those buttons are held together. Repeats inside 400 ms are ignored. **Clear** turns it off. **Program button** waits until every button is up, then records the next press (release, or about 2 seconds from the first press). The A press that opens Program is not saved. The panel shows the result, for example `R4` or `L4 + R4`, and **Cancel** aborts. Leave a back button unbound in that game’s Steam Input layout; a combo can still reach the game. Touch bits are ignored.
+- L4 (byte 13 bit `0x02`) and R4 (byte 13 bit `0x04`) were captured in a game. Other Deck button names follow Linux `drivers/hid/hid-steam.c` (`steam_do_deck_input_event`) and SDL `SDL_hidapi_steamdeck.c` (`SteamDeckButtons`). Set **Log level** to Debug. Lines look like `hidraw nodes hidraw2`, `hidraw input hidraw2`, `hidraw buttons R4`, and `hidraw shortcut fire R4`. Each toggle also writes one Info line: `Shortcut toggled playback (hidraw)`.
 - `SteamClient.Input.RegisterForControllerInputMessages` is still registered for the Steam UI. It does not toggle while the hidraw reader is open, so one press is not applied twice. On the Steam client from Oct 31 2026 that callback does not run in a game.
 - **Log level** is a menu in settings. See [Logs](#logs). Controller diagnostics are Debug only. For a shortcut test, set Log level to Debug.
 
@@ -149,9 +151,9 @@ With **Store track progress** on, this plugin writes your place in each chapter 
 
 Plex stores `viewOffset` per file, in milliseconds. For a multi-file book the plugin treats that the way Music Assistant's Plex audiobook support does: the resume point is the furthest file that still has an offset, and files before it count at their full length. A run of files that Plex has marked played, with the offset cleared, is skipped so the next file starts at the beginning. One `.m4b` is just one file, so `viewOffset` is the place inside that file.
 
-While a file is playing, the plugin tells Plex with `GET /:/timeline` about every 15 seconds, and again on pause, stop, and seek. `time` and `playbackTime` are the position in milliseconds. The timeline duration is reported longer than the real file until the file actually finishes, because Plex otherwise marks an item watched at about 90% and drops the resume point. When a file finishes, or you press Next, the plugin scrobbles that file (`/:/scrobble`) so the position is saved for any Plex client.
+While a file is playing, the plugin tells Plex with `GET /:/timeline` about every 10 seconds, and again on pause, stop, and seek. `time` and `playbackTime` are the position in milliseconds. The timeline duration is reported longer than the real file until the file actually finishes, because Plex otherwise marks an item watched at about 90% and drops the resume point. When a file finishes, or you press Next, the plugin scrobbles that file (`/:/scrobble`) so the position is saved for any Plex client.
 
-Choosing a chapter, pressing Next or Previous, or skipping backward also rewrites nearby Plex progress: earlier unfinished files are marked played, and later saved offsets are cleared, so the file you are on is the resume point. That can mark files played that you did not listen through. Pause and the 15-second updates only move the current file's offset.
+Choosing a chapter, pressing Next or Previous, or skipping backward also rewrites nearby Plex progress: earlier unfinished files are marked played, and later saved offsets are cleared, so the file you are on is the resume point. That can mark files played that you did not listen through. Pause and the 10-second updates only move the current file's offset.
 
 ## Logs
 
@@ -164,32 +166,35 @@ Each time the plugin loads, Decky starts a new file named with the time, `~/home
 - **Info** also records ordinary activity: load and unload, what is playing, shortcut presses, server switches, sign-in and sign-out, and setting changes.
 - **Debug** also records connection attempts, local checks, and controller diagnostics.
 
-## What was tested here
+## Tested
 
-This environment has no Steam Deck and no Plex server. These checks were run:
+On a Steam Deck OLED (SteamOS 3.9.5) with a real Plex Media Server:
 
-- Progress math: multi-file and single-file resume, ±30s across files, previous-chapter behavior, speed filter strings, the inflated timeline duration, and the "immediate ffplay exit is a failure" rule.
-- Plex HTTP client against a local stand-in server: library filtering, book and chapter parsing, `viewOffset`, timeline query shape (`playbackTime` is the offset, not a clock), scrobble key, cover fetch, 401, and an unreachable server. The token stayed in the header and out of URLs and error text.
-- Plex account client against a local stand-in for plex.tv: PIN creation with `strong=false`, polling until `authToken` is set, account name, and resource discovery that picks `http://192.168.1.50:32400` over a plex.direct address and a relay. Tokens stayed out of the panel payload and out of request URLs.
-- `ffplay` itself, using a generated tone and a dummy audio driver: the process stays up, pause holds the estimated position, and a mid-file seek at 2× starts past that seek point. PipeWire on a Deck was not involved.
+- Plex sign-in, server and library picking, browsing, search, and playback.
+- Audio continuing under a focused game, mixed with game audio, with the Quick Access Menu opening and closing.
+- Output to the Deck speakers and to Bluetooth headphones (AirPods Max).
+- Resume from Plex, progress written back to Plex, and the player showing in Plex Dashboard under Now Playing.
+- Falling back from the local server address to the remote one away from home.
+- Game volume, lowering the game while the book plays, and restoring it on pause.
+- The play/pause shortcut in a game with the Deck L4/R4, the Steam Controller back buttons, an Xbox Wireless Controller and DualSense over Bluetooth, and a Switch Pro Controller over USB.
+- Playback right after a reboot, before the Deck's audio has finished starting.
 
-`pnpm run build` produces the frontend bundle the zip is built from. The Quick Access Menu was not opened, because that UI only exists inside the Steam client.
+The 97 unit tests cover the progress math, the Plex and plex.tv clients against local stand-in servers (tokens stay in headers and out of URLs and errors), the controller report parsing, game-volume handling, and ffplay start, pause, and seek.
 
 ## Not tested
 
-Sign-in and playback were confirmed on a Steam Deck OLED outside this environment. The items below were not verified here.
+- Other handhelds and the LCD Steam Deck. The device names for them come from published DMI values.
+- DualSense over USB, a Switch Pro Controller over Bluetooth, and Steam Controller buttons other than the two back buttons.
+- Whether a button bound in a game's Steam Input layout still reaches the shortcut. Leave the shortcut button unbound in that game to be safe.
+- HTTPS servers with a private certificate. The plugin verifies HTTPS certificates, so a self-signed one is expected to fail.
+- Embedded chapters inside one `.m4b`. Next and previous follow Plex tracks, so a book Plex shows as one file is one chapter.
+- Volume changes while playing when `pactl` is missing.
 
-- Game Mode: audio continuing under a focused game, mixing with game audio, and the Quick Access Menu opening and closing during playback.
-- The Deck's PipeWire socket (`/run/user/<uid>/pulse/native`) and Decky's bundled `LD_LIBRARY_PATH`, which is why ffplay is launched with a cleaned environment. That failure mode is real on Decky (Museck issues around ffplay dying instantly) but was not reproduced here.
-- A real plex.tv sign-in, or a real Plex server accepting timeline updates, scrobbles, or direct file streaming with the token only in a header. If a file will not play, Plex may be refusing the header or the codec may need a transcode. This version direct-plays the file part. It does not ask Plex to transcode.
-- The saved position actually showing up in another Plex client. The request shape matches what current Plex clients send. Whether the server stores it still depends on **Store track progress**.
-- Sleep. When the Deck sleeps, playback stops. Nothing in this plugin keeps the device awake.
-- Bluetooth output, remote Plex URLs, and HTTPS servers with a private certificate. The client verifies HTTPS certificates.
-- Embedded chapters inside one `.m4b`. Next and previous follow Plex tracks. If Plex shows the book as one file, there is one chapter.
-- This environment did not open `/dev/hidraw`. On a Deck, in-game captures confirmed L4 and R4 and a right-stick touch bit. The reader, the Program-button timing, and every other button name were not re-checked here.
-- Whether a back button left unbound in a game’s Steam Input layout still shows up in the hidraw report. The capture was of the physical buttons, not of a game’s layout.
-- Position accuracy during a long stream. The position is wall-clock time since ffplay started, times the speed, plus the seek point. If the stream buffers, the bar can run ahead of the audio. Seeking restarts ffplay, so there is a short gap.
-- Live volume when `pactl` is missing.
+## Known limits
+
+- Sleep stops playback. Nothing in the plugin keeps the Deck awake.
+- Files are direct-played. The plugin never asks Plex to transcode, so a codec ffplay can't read won't play.
+- The position bar is estimated from elapsed time and speed. If the stream buffers, the bar can run slightly ahead of the audio. Seeking restarts ffplay, so there's a short gap.
 
 ## Layout
 
