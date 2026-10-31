@@ -1,7 +1,7 @@
 {
   "name": "Plex Audiobooks",
   "author": "decky-plex-audiobooks",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "flags": [],
   "api_version": 1,
   "publish": {

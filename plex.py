@@ -119,9 +119,7 @@ class PlexClient:
         self.timeout = timeout
 
     def _headers(self) -> dict[str, str]:
-        headers = client_headers(self.client_id, self.token)
-        headers["X-Plex-Provides"] = "player"
-        return headers
+        return client_headers(self.client_id, self.token)
 
     def media_headers(self) -> str:
         """Header block for ffplay. Ends with CRLF, as ffmpeg requires.
@@ -129,14 +127,7 @@ class PlexClient:
         Includes the token. Do not log the return value.
         """
 
-        lines = [
-            f"X-Plex-Token: {self.token}",
-            f"X-Plex-Client-Identifier: {self.client_id}",
-            f"X-Plex-Product: {PRODUCT_NAME}",
-            f"X-Plex-Version: {PRODUCT_VERSION}",
-            "X-Plex-Device: Steam Deck",
-            f"X-Plex-Device-Name: {PRODUCT_NAME}",
-        ]
+        lines = [f"{key}: {value}" for key, value in self._headers().items() if key != "Accept"]
         return "".join(line + "\r\n" for line in lines)
 
     def stream_url(self, part_key: str) -> str:
@@ -315,11 +306,13 @@ class PlexClient:
         real_duration_ms: int,
         *,
         finishing: bool = False,
+        play_queue_item_id: str = "",
     ) -> None:
         """Report playback progress. ``state`` is playing, paused, or stopped.
 
         ``playbackTime`` is the same millisecond offset as ``time``. Plex
-        rejects a unix timestamp in that field.
+        rejects a unix timestamp in that field. ``playQueueItemID`` is sent
+        when a play queue was opened, which is what Dashboard Now Playing uses.
         """
 
         duration = timeline_duration_ms(real_duration_ms, position_ms, finishing=finishing)
@@ -333,6 +326,8 @@ class PlexClient:
             "playbackTime": str(max(0, int(position_ms))),
             "hasMDE": "1",
         }
+        if play_queue_item_id:
+            params["playQueueItemID"] = str(play_queue_item_id)
         self._request("/:/timeline?" + urllib.parse.urlencode(params), timeout=5)
 
     def scrobble(self, rating_key: str, played: bool) -> None:
@@ -359,8 +354,8 @@ class PlexClient:
         self.scrobble(rating_key, True)
         self.scrobble(rating_key, False)
 
-    def open_play_queue(self, machine_identifier: str, rating_key: str) -> None:
-        """Open a Plex session for this file. Failure is non-fatal for callers."""
+    def open_play_queue(self, machine_identifier: str, rating_key: str) -> str:
+        """Open a Plex session for this file. Returns ``playQueueItemID`` when Plex sends one."""
 
         if not machine_identifier or not rating_key:
             raise PlexError("Plex did not identify this server.")
@@ -374,7 +369,12 @@ class PlexClient:
             "own": "1",
             "includeChapters": "1",
         })
-        self._request("/playQueues?" + params, method="POST", data=b"", timeout=5)
+        raw = self._request("/playQueues?" + params, method="POST", data=b"", timeout=5)
+        text = raw.decode("utf-8", errors="replace")
+        match = re.search(r'playQueueItemID["\s:=]+"?(\d+)', text)
+        if match is None:
+            match = re.search(r'playQueueSelectedItemID["\s:=]+"?(\d+)', text)
+        return match.group(1) if match else ""
 
     def fetch_cover(self, thumb_path: str, size: int = 180) -> str:
         if not thumb_path:

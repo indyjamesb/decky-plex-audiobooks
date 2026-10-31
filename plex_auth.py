@@ -17,14 +17,19 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import socket
 import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from datetime import datetime, timezone
 
-PRODUCT_NAME = "Plex Audiobooks"
-PRODUCT_VERSION = "0.1.4"
+PRODUCT_NAME = "Plex Audiobooks for Steam Deck"
+PRODUCT_VERSION = "0.1.5"
+CONNECT_TIMEOUT_S = 4.0
+CANNOT_REACH = "Can't reach your Plex server."
 PLEX_TV = "https://plex.tv"
 LINK_URL = "https://plex.tv/link"
 
@@ -75,18 +80,58 @@ class PlexError(Exception):
         self.status = status
 
 
-def client_headers(client_id: str, token: str = "") -> dict[str, str]:
-    """Headers that identify this install to Plex. Token is optional and never logged here."""
+def stable_client_id(existing: object) -> str:
+    """Client id saved in settings. An existing value is never replaced."""
+
+    text = str(existing or "").strip()
+    if text:
+        return text
+    return str(uuid.uuid4())
+
+
+def device_name(hostname: str | None = None) -> str:
+    """Deck hostname, without a domain. ``steamdeck`` when the host has no name."""
+
+    if hostname is None:
+        try:
+            hostname = socket.gethostname()
+        except OSError:
+            hostname = ""
+    text = str(hostname or "").split(".")[0].strip()
+    return text or "steamdeck"
+
+
+def platform_version() -> str:
+    try:
+        with open("/etc/os-release", "r", encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith("VERSION_ID="):
+                    value = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    if value:
+                        return value
+    except OSError:
+        pass
+    return "SteamOS"
+
+
+def client_headers(client_id: str, token: str = "", *, name: str | None = None) -> dict[str, str]:
+    """Headers that identify this install to Plex. Token is optional and never logged here.
+
+    Sent on plex.tv and on the media server so Dashboard Now Playing and the
+    device list show this player.
+    """
 
     headers = {
         "Accept": "application/json",
         "X-Plex-Product": PRODUCT_NAME,
         "X-Plex-Version": PRODUCT_VERSION,
         "X-Plex-Client-Identifier": client_id or "plex-audiobooks",
-        "X-Plex-Platform": "Linux",
-        "X-Plex-Platform-Version": "SteamOS",
+        "X-Plex-Platform": "SteamOS",
+        "X-Plex-Platform-Version": platform_version(),
         "X-Plex-Device": "Steam Deck",
-        "X-Plex-Device-Name": PRODUCT_NAME,
+        "X-Plex-Device-Name": device_name(name),
+        "X-Plex-Model": "Steam Deck",
+        "X-Plex-Provides": "player",
         "User-Agent": f"PlexAudiobooks/{PRODUCT_VERSION}",
     }
     if token:
@@ -171,6 +216,131 @@ def choose_connection(connections: list[dict]) -> dict | None:
     return min(usable, key=connection_rank)
 
 
+def redact_secrets(text: str) -> str:
+    """Remove Plex tokens from a log line. URLs must not carry X-Plex-Token either."""
+
+    text = re.sub(r"(?i)(X-Plex-Token\s*[=:]\s*)\S+", r"\1[redacted]", text or "")
+    text = re.sub(r"(?i)((?:auth|access)Token[\"']?\s*[:=]\s*[\"']?)[^\"'\s,}]+", r"\1[redacted]", text)
+    return text
+
+
+def connection_record(connection: dict) -> dict | None:
+    """One saved address. No token."""
+
+    uri = connection_uri(connection)
+    if not uri:
+        return None
+    relay = _truthy(connection.get("relay"))
+    local = _truthy(connection.get("local")) or (not relay and _is_private_host(uri))
+    protocol = "https" if uri.startswith("https://") else "http"
+    return {"uri": uri, "local": bool(local), "relay": bool(relay), "protocol": protocol}
+
+
+def order_connections(connections: list[dict]) -> list[dict]:
+    """Local, then remote non-relay, then relay. Stable and de-duplicated."""
+
+    records: list[dict] = []
+    seen: set[str] = set()
+    for item in connections:
+        if not isinstance(item, dict):
+            continue
+        record = connection_record(item)
+        if record is None or record["uri"] in seen:
+            continue
+        seen.add(record["uri"])
+        records.append(record)
+
+    def tier(record: dict) -> int:
+        if record["relay"]:
+            return 2
+        if record["local"]:
+            return 0
+        return 1
+
+    records.sort(key=lambda record: (tier(record), connection_rank(record), record["uri"]))
+    return records
+
+
+def attempt_order(connections: list[dict], current: str) -> list[str]:
+    """Current working URL first, then the others from local to relay."""
+
+    ranked = [item["uri"] for item in order_connections(connections)]
+    current = (current or "").rstrip("/")
+    if current and current in ranked:
+        return [current] + [uri for uri in ranked if uri != current]
+    return ranked
+
+
+def local_candidate(connections: list[dict], current: str) -> str | None:
+    """Best local URL when the saved one is not already that local address."""
+
+    locals_ = [item["uri"] for item in order_connections(connections) if item["local"] and not item["relay"]]
+    if not locals_:
+        return None
+    current = (current or "").rstrip("/")
+    if current in locals_:
+        return None
+    return locals_[0]
+
+
+def prefer_local(connections: list[dict], current: str, local_works: bool) -> str:
+    candidate = local_candidate(connections, current)
+    if candidate and local_works:
+        return candidate
+    return (current or "").rstrip("/")
+
+
+def _connection_failure(err: BaseException) -> bool:
+    if not isinstance(err, PlexError):
+        return False
+    if err.status in (401, 404):
+        return False
+    return bool(err.unreachable) or err.status is None or (err.status is not None and err.status >= 500)
+
+
+def run_failover(connections: list[dict], current: str, operation, refetch):
+    """Call ``operation(uri)`` until one works.
+
+    Network failures try the next saved address (local, then remote, then
+    relay). If every saved address fails, ``refetch`` supplies a fresh list
+    from plex.tv and those new addresses are tried. ``operation`` raising
+    with HTTP 401 or 404 is not a connection failure. The raised error when
+    nothing works is the plain "Can't reach your Plex server." message.
+    """
+
+    last = None
+    tried: list[str] = []
+    ordered = order_connections(connections)
+    for uri in attempt_order(ordered, current):
+        tried.append(uri)
+        try:
+            return operation(uri), uri, ordered, False
+        except PlexError as err:
+            if not _connection_failure(err):
+                raise
+            last = err
+    fresh: list[dict] = []
+    try:
+        fresh = refetch() or []
+    except PlexError as err:
+        if not _connection_failure(err):
+            raise
+        last = err
+    fresh_ordered = order_connections(fresh)
+    for uri in [item["uri"] for item in fresh_ordered]:
+        if uri in tried:
+            continue
+        try:
+            return operation(uri), uri, fresh_ordered, True
+        except PlexError as err:
+            if not _connection_failure(err):
+                raise
+            last = err
+    if last is not None and not _connection_failure(last):
+        raise last
+    raise PlexError(CANNOT_REACH, unreachable=True) from None
+
+
 def _provides_server(value: object) -> bool:
     if isinstance(value, list):
         return "server" in value
@@ -201,12 +371,14 @@ def parse_servers(payload: object, account_token: str) -> list[dict]:
         if chosen is None:
             continue
         access = str(resource.get("accessToken") or "").strip() or account_token
+        saved_connections = order_connections(resource.get("connections") or [])
         servers.append({
             "client_identifier": str(resource.get("clientIdentifier") or ""),
             "name": resource.get("name") or "Plex",
             "uri": connection_uri(chosen),
             "local": _truthy(chosen.get("local")) or _is_private_host(connection_uri(chosen)),
             "access_token": access,
+            "connections": saved_connections,
         })
     servers.sort(key=lambda item: (not item["local"], item["name"].lower(), item["uri"]))
     return servers

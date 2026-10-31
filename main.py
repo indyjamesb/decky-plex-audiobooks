@@ -17,7 +17,18 @@ import decky
 from deck_hid import DeckHidWatcher, migrate_shortcut, normalize_buttons
 from player import Player, PlayerError, build_child_env, find_ffplay, find_pulse_socket, set_process_volume
 from plex import PlexClient, PlexError, normalize_server_url
-from plex_auth import PlexAccount, public_server, sign_in_payload
+from plex_auth import (
+    CANNOT_REACH,
+    CONNECT_TIMEOUT_S,
+    PlexAccount,
+    local_candidate,
+    order_connections,
+    public_server,
+    redact_secrets,
+    run_failover,
+    sign_in_payload,
+    stable_client_id,
+)
 from progress import (
     AudioTrack,
     book_position,
@@ -33,8 +44,8 @@ from progress import (
     track_is_complete,
 )
 
-VERSION = "0.1.4"
-REPORT_INTERVAL_S = 15
+VERSION = "0.1.5"
+REPORT_INTERVAL_S = 10
 _PY_LOG_LEVELS = {
     "error": logging.ERROR,
     "warning": logging.WARNING,
@@ -44,6 +55,7 @@ _PY_LOG_LEVELS = {
 
 DEFAULTS = {
     "server_url": "",
+    "server_connections": [],
     "server_name": "",
     "server_id": "",
     "token": "",
@@ -102,6 +114,10 @@ class Plugin:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._shortcut_lock = threading.Lock()
         self._last_shortcut_at = 0.0
+        self._connection_dirty = False
+        self._local_probe_at = 0.0
+        self._probe_soon = False
+        self._play_queue_item_id = ""
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -113,8 +129,9 @@ class Plugin:
         settings_dir = decky.DECKY_PLUGIN_SETTINGS_DIR
         self.settings_path = os.path.join(settings_dir, "settings.json")
         self._load_settings()
-        if not self.settings.get("client_id"):
-            self.settings["client_id"] = os.urandom(16).hex()
+        client_id = stable_client_id(self.settings.get("client_id"))
+        if client_id != (self.settings.get("client_id") or ""):
+            self.settings["client_id"] = client_id
             self._write_settings()
         self.volume = int(self.settings.get("volume") or 80)
         self._apply_log_level()
@@ -127,6 +144,7 @@ class Plugin:
         self._hid = DeckHidWatcher(on_fire=self._schedule_shortcut, log_debug=self._hid_debug)
         self._hid.set_shortcut(list(self.settings.get("play_pause_buttons") or []))
         self._hid.start()
+        asyncio.create_task(self._populate_connections())
         decky.logger.info("Plex Audiobooks %s loaded", VERSION)
 
     async def _unload(self):
@@ -194,6 +212,123 @@ class Plugin:
             self.settings.get("client_id") or "",
         )
 
+    def _connection_list(self) -> list:
+        saved = self.settings.get("server_connections")
+        if isinstance(saved, list) and saved:
+            return saved
+        url = self.settings.get("server_url") or ""
+        if not url:
+            return []
+        return order_connections([{"uri": url}])
+
+    def _refetch_connections(self) -> list:
+        token = str(self.settings.get("account_token") or "")
+        if not token:
+            return []
+        servers = self._account().list_servers(token)
+        server_id = str(self.settings.get("server_id") or "")
+        current = str(self.settings.get("server_url") or "")
+        match = None
+        for server in servers:
+            if server_id and server.get("client_identifier") == server_id:
+                match = server
+                break
+        if match is None:
+            for server in servers:
+                uris = [item.get("uri") for item in server.get("connections") or []]
+                if current and (current in uris or server.get("uri") == current):
+                    match = server
+                    break
+        if match is None:
+            return []
+        access = str(match.get("access_token") or "")
+        if access and not any(char in access for char in "\r\n"):
+            self.settings["token"] = access
+        if match.get("client_identifier"):
+            self.settings["server_id"] = match.get("client_identifier")
+        if match.get("name"):
+            self.settings["server_name"] = match.get("name")
+        return list(match.get("connections") or [])
+
+    def _with_server(self, fn):
+        def operation(uri: str):
+            client = PlexClient(
+                uri,
+                self.settings.get("token") or "",
+                self.settings.get("client_id") or "",
+                timeout=CONNECT_TIMEOUT_S,
+            )
+            try:
+                return fn(client)
+            except PlexError as err:
+                decky.logger.debug("Plex connection failed: %s", redact_secrets(err.message))
+                raise
+
+        result, uri, connections, _refetched = run_failover(
+            self._connection_list(),
+            self.settings.get("server_url") or "",
+            operation,
+            self._refetch_connections,
+        )
+        if connections:
+            self.settings["server_connections"] = connections
+        if uri and uri != (self.settings.get("server_url") or ""):
+            self.settings["server_url"] = uri
+            self._connection_dirty = True
+            self._probe_soon = True
+            decky.logger.info("Plex connection switched")
+        return result
+
+    async def _plex(self, fn):
+        result = await _to_thread(self._with_server, fn)
+        if self._connection_dirty:
+            self._connection_dirty = False
+            await self._save_settings()
+        return result
+
+    async def _populate_connections(self) -> None:
+        if not self._running or self.settings.get("server_connections"):
+            return
+        url = self.settings.get("server_url") or ""
+        if not url:
+            return
+        fresh: list = []
+        if self.settings.get("account_token"):
+            try:
+                fresh = await _to_thread(self._refetch_connections)
+            except Exception:
+                decky.logger.info("Could not refresh Plex connections; using the saved server URL")
+                fresh = []
+        if not fresh:
+            fresh = order_connections([{"uri": url}])
+        self.settings["server_connections"] = fresh
+        await self._save_settings()
+
+    async def _maybe_prefer_local(self) -> None:
+        now = time.monotonic()
+        if not self._probe_soon and now - self._local_probe_at < 45:
+            return
+        candidate = local_candidate(self._connection_list(), self.settings.get("server_url") or "")
+        if not candidate:
+            self._probe_soon = False
+            return
+        self._probe_soon = False
+        self._local_probe_at = now
+        token = self.settings.get("token") or ""
+        client_id = self.settings.get("client_id") or ""
+
+        def probe() -> None:
+            PlexClient(candidate, token, client_id, timeout=CONNECT_TIMEOUT_S).identity()
+
+        try:
+            await _to_thread(probe)
+        except Exception:
+            decky.logger.debug("Local Plex connection is not reachable")
+            return
+        self.settings["server_url"] = candidate
+        await self._save_settings()
+        decky.logger.info("Plex connection switched back to local")
+
     def _configured_message(self) -> str | None:
         if not self.settings.get("server_url") or not self.settings.get("token"):
             return "Add the Plex server in Settings."
@@ -202,8 +337,9 @@ class Plugin:
         return None
 
     def _ensure_client_id(self) -> str:
-        if not self.settings.get("client_id"):
-            self.settings["client_id"] = os.urandom(16).hex()
+        client_id = stable_client_id(self.settings.get("client_id"))
+        if client_id != (self.settings.get("client_id") or ""):
+            self.settings["client_id"] = client_id
             if self.settings_path:
                 try:
                     self._write_settings()
@@ -270,12 +406,13 @@ class Plugin:
     def _hid_debug(self, message: str) -> None:
         decky.logger.debug("%s", message)
 
-    def _schedule_shortcut(self) -> None:
+    def _schedule_shortcut(self, via: str = "hidraw") -> None:
         loop = self._loop
         if loop is None or not self._running:
             return
+        source = via if via in ("hidraw", "evdev") else "hidraw"
         try:
-            asyncio.run_coroutine_threadsafe(self.shortcut_toggle("hidraw"), loop)
+            asyncio.run_coroutine_threadsafe(self.shortcut_toggle(source), loop)
         except RuntimeError:
             decky.logger.debug("hidraw shortcut skipped; plugin loop is stopped")
 
@@ -347,7 +484,10 @@ class Plugin:
             self.settings["auth_method"] = "manual"
         if not self.settings.get("token"):
             return {"success": False, "message": "Enter a Plex token, or sign in with a link code."}
+        previous = self.settings.get("server_url") or ""
         self.settings["server_url"] = url
+        if url != previous or not self.settings.get("server_connections"):
+            self.settings["server_connections"] = order_connections([{"uri": url}])
         self.settings["library_key"] = str(library_key or "")
         # An empty title means the panel saved while the library list was not
         # loaded. Keep the name we already stored.
@@ -506,6 +646,7 @@ class Plugin:
                 self.cover = ""
         self.settings["token"] = server_token
         self.settings["server_url"] = new_url
+        self.settings["server_connections"] = match.get("connections") or order_connections([{"uri": new_url}])
         self.settings["server_name"] = match.get("name") or ""
         self.settings["server_id"] = client_identifier
         self.settings["auth_method"] = "link"
@@ -538,6 +679,7 @@ class Plugin:
             "username", "library_key", "library_title",
         ):
             self.settings[key] = ""
+        self.settings["server_connections"] = []
         self.settings["track_progress"] = None
         self.settings["auth_method"] = ""
         self._pending_pin = None
@@ -561,10 +703,9 @@ class Plugin:
         if problem:
             return {"success": False, "message": problem, "books": [], "total": 0}
         sort_name = normalize_book_sort(sort_id or self.settings.get("book_sort"))
-        client = self._client()
         try:
-            result = await _to_thread(
-                lambda: client.list_books(
+            result = await self._plex(
+                lambda client: client.list_books(
                     self.settings["library_key"],
                     query=query or "",
                     start=int(start or 0),
@@ -575,9 +716,9 @@ class Plugin:
             return {"success": False, "message": err.message, "books": [], "total": 0}
         except Exception:
             decky.logger.error("Listing books failed")
-            return {"success": False, "message": "Couldn't reach the Plex server.", "books": [], "total": 0}
+            return {"success": False, "message": CANNOT_REACH, "books": [], "total": 0}
         books = sort_books(result.get("books") or [], sort_name)
-        await self._attach_covers(client, books)
+        await self._attach_covers(books)
         return {
             "success": True,
             "books": [_public_book(book) for book in books],
@@ -590,16 +731,15 @@ class Plugin:
         problem = self._configured_message()
         if problem:
             return {"success": False, "message": problem}
-        client = self._client()
         try:
-            book, tracks = await _to_thread(client.get_book, str(album_key))
+            book, tracks = await self._plex(lambda client: client.get_book(str(album_key)))
         except PlexError as err:
             return {"success": False, "message": err.message}
         except Exception:
             decky.logger.error("Loading a book failed")
-            return {"success": False, "message": "Couldn't reach the Plex server."}
+            return {"success": False, "message": CANNOT_REACH}
         resume = choose_resume(tracks)
-        cover = await self._cover_for(client, book)
+        cover = await self._cover_for(book)
         position, total = book_position(tracks, resume.index if not resume.finished else 0, 0 if resume.finished else resume.offset_ms)
         return {
             "success": True,
@@ -616,7 +756,7 @@ class Plugin:
             "cover": cover,
         }
 
-    async def _attach_covers(self, client: PlexClient, books: list[dict]) -> None:
+    async def _attach_covers(self, books: list[dict]) -> None:
         semaphore = asyncio.Semaphore(4)
 
         async def one(book: dict) -> None:
@@ -634,7 +774,7 @@ class Plugin:
                     book["cover"] = cached
                     return
                 try:
-                    data_url = await _to_thread(client.fetch_cover, thumb)
+                    data_url = await self._plex(lambda client, path=thumb: client.fetch_cover(path))
                 except Exception:
                     data_url = ""
             if data_url:
@@ -643,7 +783,7 @@ class Plugin:
 
         await asyncio.gather(*(one(book) for book in books))
 
-    async def _cover_for(self, client: PlexClient, book: dict) -> str:
+    async def _cover_for(self, book: dict) -> str:
         thumb = book.get("thumb") or ""
         if not thumb:
             return ""
@@ -651,7 +791,7 @@ class Plugin:
         if cached is not None:
             return cached
         try:
-            data_url = await _to_thread(client.fetch_cover, thumb)
+            data_url = await self._plex(lambda client, path=thumb: client.fetch_cover(path))
         except Exception:
             return ""
         if data_url:
@@ -672,15 +812,14 @@ class Plugin:
         problem = self._configured_message()
         if problem:
             return {"success": False, "message": problem}
-        client = self._client()
         try:
-            book, tracks = await _to_thread(client.get_book, str(album_key))
+            book, tracks = await self._plex(lambda client: client.get_book(str(album_key)))
         except PlexError as err:
             self.last_error = err.message
             return {"success": False, "message": err.message}
         except Exception:
             decky.logger.error("Loading a book for playback failed")
-            self.last_error = "Couldn't reach the Plex server."
+            self.last_error = CANNOT_REACH
             return {"success": False, "message": self.last_error}
         playable = [track for track in tracks if track.part_key]
         if not playable:
@@ -694,7 +833,7 @@ class Plugin:
             resume = choose_resume(playable)
             index = 0 if resume.finished else resume.index
             offset = 0 if resume.finished else resume.offset_ms
-        cover = await self._cover_for(client, book)
+        cover = await self._cover_for(book)
         async with self._lock:
             self.book = book
             self.tracks = playable
@@ -845,11 +984,21 @@ class Plugin:
             return {"success": False, "message": self.last_error}
         self.index = index
         self.rest_offset_ms = offset_ms
-        client = self._client()
+        try:
+            url, headers = await self._plex(
+                lambda client: (client.stream_url(track.part_key), client.media_headers())
+            )
+        except PlexError as err:
+            self.last_error = err.message
+            return {"success": False, "message": err.message}
+        except Exception:
+            decky.logger.error("Could not reach Plex to start playback")
+            self.last_error = CANNOT_REACH
+            return {"success": False, "message": self.last_error}
         try:
             self.player.start(
-                url=client.stream_url(track.part_key),
-                headers=client.media_headers(),
+                url=url,
+                headers=headers,
                 offset_ms=offset_ms,
                 speed=self._nearest_speed(self.settings.get("speed") or 1),
                 volume=self.volume,
@@ -883,11 +1032,14 @@ class Plugin:
         return {"success": True}
 
     async def _open_queue(self, rating_key: str) -> None:
-        client = self._client()
         try:
-            identity = await _to_thread(client.identity)
-            await _to_thread(client.open_play_queue, identity.get("machine_identifier") or "", rating_key)
+            identity = await self._plex(lambda client: client.identity())
+            item_id = await self._plex(
+                lambda client: client.open_play_queue(identity.get("machine_identifier") or "", rating_key)
+            )
+            self._play_queue_item_id = str(item_id or "")
         except Exception:
+            self._play_queue_item_id = ""
             decky.logger.info("Plex play queue was not opened; progress still reports over timeline")
 
     async def _report_current(self, state: str) -> None:
@@ -897,15 +1049,15 @@ class Plugin:
 
     async def _report_locked(self, track: AudioTrack, state: str, position_ms: int, *, finishing: bool) -> None:
         position = reported_position_ms(position_ms, state)
-        client = self._client()
         try:
-            await _to_thread(
-                lambda: client.timeline(
+            await self._plex(
+                lambda client: client.timeline(
                     track.rating_key,
                     state,
                     position,
                     track.duration_ms,
                     finishing=finishing,
+                    play_queue_item_id=self._play_queue_item_id,
                 )
             )
             self._last_report = time.monotonic()
@@ -915,9 +1067,8 @@ class Plugin:
             decky.logger.warning("Progress report failed (%s)", state)
 
     async def _scrobble_locked(self, track: AudioTrack, played: bool) -> None:
-        client = self._client()
         try:
-            await _to_thread(client.scrobble, track.rating_key, played)
+            await self._plex(lambda client: client.scrobble(track.rating_key, played))
         except Exception:
             decky.logger.warning("Scrobble failed")
 
@@ -934,17 +1085,16 @@ class Plugin:
         asyncio.create_task(self._align_around(generation, snapshot, index))
 
     async def _align_around(self, generation: int, tracks: list[AudioTrack], index: int) -> None:
-        client = self._client()
         for position, track in enumerate(tracks):
             if generation != self._align_gen or not self._running:
                 return
             try:
                 if position < index and not track_is_complete(track):
-                    await _to_thread(client.scrobble, track.rating_key, True)
+                    await self._plex(lambda client, key=track.rating_key: client.scrobble(key, True))
                     track.view_count = max(1, track.view_count)
                     track.view_offset_ms = 0
                 elif position > index and (track.view_offset_ms > 0 or track.view_count > 0):
-                    await _to_thread(client.clear_progress, track.rating_key)
+                    await self._plex(lambda client, key=track.rating_key: client.clear_progress(key))
                     track.view_offset_ms = 0
                     track.view_count = 0
             except Exception:
@@ -958,6 +1108,10 @@ class Plugin:
                 raise
             except Exception:
                 decky.logger.error("Playback tick failed")
+            try:
+                await self._maybe_prefer_local()
+            except Exception:
+                decky.logger.debug("Local Plex check failed")
             await asyncio.sleep(1)
 
     async def _tick(self) -> None:

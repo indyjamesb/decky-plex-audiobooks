@@ -5,12 +5,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from plex_auth import (
     PRODUCT_NAME,
+    PRODUCT_VERSION,
     PlexAccount,
     PlexError,
     choose_connection,
+    client_headers,
+    device_name,
     parse_pin,
     public_server,
+    redact_secrets,
     sign_in_payload,
+    stable_client_id,
 )
 
 ACCOUNT_TOKEN = "account-token-value-abcdefgh"
@@ -213,6 +218,34 @@ class PlexTvFlowTests(unittest.TestCase):
         self.assertTrue(raised.exception.unreachable)
         self.assertNotIn(ACCOUNT_TOKEN, raised.exception.message)
         self.assertIn("plex.tv", raised.exception.message)
+
+
+class PlayerIdentityTests(unittest.TestCase):
+    def test_headers_identify_the_player_and_keep_the_token_out_of_the_log_shape(self):
+        client_id = "11111111-2222-3333-4444-555555555555"
+        headers = client_headers(client_id, token="session-token", name="steamdeck.local")
+        self.assertEqual(headers["X-Plex-Product"], "Plex Audiobooks for Steam Deck")
+        self.assertEqual(headers["X-Plex-Version"], PRODUCT_VERSION)
+        self.assertEqual(headers["X-Plex-Client-Identifier"], client_id)
+        self.assertEqual(headers["X-Plex-Platform"], "SteamOS")
+        self.assertTrue(headers["X-Plex-Platform-Version"])
+        self.assertEqual(headers["X-Plex-Device"], "Steam Deck")
+        self.assertEqual(headers["X-Plex-Device-Name"], "steamdeck")
+        self.assertEqual(headers["X-Plex-Model"], "Steam Deck")
+        self.assertEqual(headers["X-Plex-Provides"], "player")
+        logged = redact_secrets(" ".join(f"{key}={value}" for key, value in headers.items()))
+        self.assertNotIn("session-token", logged)
+        self.assertIn("[redacted]", logged)
+
+    def test_client_id_is_created_once(self):
+        first = stable_client_id("")
+        self.assertEqual(stable_client_id(first), first)
+        self.assertNotEqual(stable_client_id("already-saved"), first)
+        self.assertEqual(stable_client_id("already-saved"), "already-saved")
+
+    def test_device_name_falls_back(self):
+        self.assertEqual(device_name(""), "steamdeck")
+        self.assertEqual(device_name("steamdeck.local"), "steamdeck")
 
 
 if __name__ == "__main__":

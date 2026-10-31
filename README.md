@@ -6,6 +6,14 @@ Version 0.1 is a small player. One server, one library, browse and search, backg
 
 ## Changelog
 
+### 0.1.5
+
+Play/pause still defaults to R4, and that name now means the Deck R4 or the Steam Controller right back button. Hidraw also reads an Xbox Wireless Controller over Bluetooth, a DualSense over Bluetooth, and a Switch Pro Controller over USB. A book page shows Resume and Chapters. The plugin keeps every Plex connection for the chosen server and fails over from local to remote to relay without asking. Requests to plex.tv and the media server identify this player (product, version, a client id saved once, Steam Deck device fields) and report `GET /:/timeline` about every 10 seconds and on play, pause, seek, and stop. That session display has not been checked against a real Plex server yet.
+
+Device-verified on Oct 31 2026: Deck L4/R4, Steam Controller back buttons (28DE:1304 report 0x42), Xbox Wireless Controller Bluetooth (045E:0B13), DualSense Bluetooth (054C:0CE6 report 0x31), Switch Pro Controller USB (057E:2009 report 0x30).
+
+Not captured, so untested: DualSense USB (report 0x01, buttons one byte earlier), Switch Pro Controller over Bluetooth (same 0x30 report), the generic evdev gamepad path, and any Steam Controller button other than the two back buttons. Dashboard Now Playing for this player is also untested until it is tried on a real server.
+
 ### 0.1.4
 
 Play/pause works while a game is focused. The Steam UI callback only runs when the Steam UI has focus, so the backend reads the Deck controller on `/dev/hidraw` and toggles playback itself. The default shortcut is R4. A saved action code 45 from 0.1.3 becomes R4. Program button waits until every button is released, then records the next press, so the A press that opens Program is not saved.
@@ -19,13 +27,13 @@ The shortcut used `RegisterForControllerInputMessages` after `RegisterForControl
 Build the zip on a computer (or on the Deck, if Node is installed), then copy it over. Decky does not need its plugin store for this.
 
 1. Install [Decky Loader](https://decky.xyz/) if it is not already installed.
-2. Copy `release/plex-audiobooks-v0.1.4.zip` to the Deck. The zip in this repository is already built.
+2. Copy `release/plex-audiobooks-v0.1.5.zip` to the Deck. The zip in this repository is already built.
 3. In Desktop Mode, or over SSH:
 
 ```bash
 mkdir -p ~/homebrew/plugins
 cd ~/homebrew/plugins
-unzip -o /path/to/plex-audiobooks-v0.1.4.zip
+unzip -o /path/to/plex-audiobooks-v0.1.5.zip
 ```
 
 The zip already contains a `plex-audiobooks` folder. You should end up with:
@@ -56,7 +64,7 @@ pnpm test
 pnpm run package
 ```
 
-`pnpm test` runs the Python unit tests. `pnpm run package` writes `release/plex-audiobooks-v0.1.4.zip`.
+`pnpm test` runs the Python unit tests. `pnpm run package` writes `release/plex-audiobooks-v0.1.5.zip`.
 
 `pnpm run build` only produces `dist/index.js`. A manual install without the zip is the plugin directory containing `dist/`, `main.py`, `deck_hid.py`, `player.py`, `plex.py`, `plex_auth.py`, `progress.py`, `plugin.json`, `package.json`, `LICENSE`, `NOTICE`, and `README.md`.
 

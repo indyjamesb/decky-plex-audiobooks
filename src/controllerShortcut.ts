@@ -44,7 +44,64 @@ const BUTTON_ORDER = [
   "R2", "L2", "R1", "L1", "Y", "B", "X", "A",
   "Up", "Right", "Left", "Down", "View", "Steam", "Start",
   "L5", "R5", "LPad", "RPad", "L3", "R3", "L4", "R4", "QAM",
+  "XBOX_A", "XBOX_B", "XBOX_X", "XBOX_Y", "XBOX_LB", "XBOX_RB", "XBOX_VIEW", "XBOX_MENU", "XBOX_SHARE",
+  "DS_SQUARE", "DS_CROSS", "DS_CIRCLE", "DS_TRIANGLE", "DS_L1", "DS_R1", "DS_CREATE", "DS_OPTIONS",
+  "DS_PS", "DS_TOUCH", "DS_MUTE",
+  "NS_Y", "NS_X", "NS_B", "NS_A", "NS_R", "NS_ZR", "NS_MINUS", "NS_PLUS", "NS_HOME", "NS_CAPTURE",
+  "NS_L", "NS_ZL",
+  "EV_SOUTH", "EV_EAST", "EV_NORTH", "EV_WEST", "EV_TL", "EV_TR", "EV_TL2", "EV_TR2",
+  "EV_SELECT", "EV_START", "EV_MODE", "EV_THUMBL", "EV_THUMBR",
 ];
+
+const FRIENDLY: Record<string, string> = {
+  R4: "Steam Controller right back / Deck R4",
+  L4: "Steam Controller left back / Deck L4",
+  XBOX_A: "Xbox A",
+  XBOX_B: "Xbox B",
+  XBOX_X: "Xbox X",
+  XBOX_Y: "Xbox Y",
+  XBOX_LB: "Xbox LB",
+  XBOX_RB: "Xbox RB",
+  XBOX_VIEW: "Xbox View",
+  XBOX_MENU: "Xbox Menu",
+  XBOX_SHARE: "Xbox Share",
+  DS_SQUARE: "DualSense Square",
+  DS_CROSS: "DualSense Cross",
+  DS_CIRCLE: "DualSense Circle",
+  DS_TRIANGLE: "DualSense Triangle",
+  DS_L1: "DualSense L1",
+  DS_R1: "DualSense R1",
+  DS_CREATE: "DualSense Create",
+  DS_OPTIONS: "DualSense Options",
+  DS_PS: "DualSense PS",
+  DS_TOUCH: "DualSense Touchpad",
+  DS_MUTE: "DualSense Mute",
+  NS_Y: "Switch Y",
+  NS_X: "Switch X",
+  NS_B: "Switch B",
+  NS_A: "Switch A",
+  NS_R: "Switch R",
+  NS_ZR: "Switch ZR",
+  NS_MINUS: "Switch Minus",
+  NS_PLUS: "Switch Plus",
+  NS_HOME: "Switch Home",
+  NS_CAPTURE: "Switch Capture",
+  NS_L: "Switch L",
+  NS_ZL: "Switch ZL",
+  EV_SOUTH: "Gamepad A",
+  EV_EAST: "Gamepad B",
+  EV_NORTH: "Gamepad X",
+  EV_WEST: "Gamepad Y",
+  EV_TL: "Gamepad LB",
+  EV_TR: "Gamepad RB",
+  EV_TL2: "Gamepad LT",
+  EV_TR2: "Gamepad RT",
+  EV_SELECT: "Gamepad View",
+  EV_START: "Gamepad Menu",
+  EV_MODE: "Gamepad Guide",
+  EV_THUMBL: "Gamepad L3",
+  EV_THUMBR: "Gamepad R3",
+};
 
 const KNOWN = new Set(BUTTON_ORDER);
 
@@ -87,7 +144,7 @@ export function actionName(code: number): string {
 
 export function bindingLabel(buttons: string[]): string {
   if (!buttons.length) return "Not set";
-  return orderButtons(buttons).join(" + ");
+  return orderButtons(buttons).map((name) => FRIENDLY[name] || name).join(" + ");
 }
 
 export function registrationStatus(): string {
@@ -139,10 +196,10 @@ export function captureSnapshot(): { phase: CapturePhase; buttons: string[]; lab
   if ((capPhase === "wait_release" || capPhase === "listen") && capButtons.length === 0 && now - capStarted >= 8000) {
     finishCapture("timeout");
   }
-  if (capPhase === "listen" && capFirst !== null && now - capFirst >= 2000) {
+  if (capPhase === "listen" && capFirst !== null && now - capFirst >= 1500) {
     finishCapture("captured");
   }
-  const secondsLeft = capPhase === "listen" && capFirst !== null ? Math.max(0, 2 - (now - capFirst) / 1000) : null;
+  const secondsLeft = capPhase === "listen" && capFirst !== null ? Math.max(0, 1.5 - (now - capFirst) / 1000) : null;
   return {
     phase: capPhase,
     buttons: capButtons.slice(),
@@ -189,10 +246,8 @@ function feedCapture(names: Set<string>): void {
       if (!capButtons.includes(name)) capButtons.push(name);
     }
     capButtons = orderButtons(capButtons);
-    if (capFirst !== null && Date.now() - capFirst >= 2000) finishCapture("captured");
-    return;
   }
-  if (capFirst !== null && capButtons.length > 0) finishCapture("captured");
+  if (capFirst !== null && Date.now() - capFirst >= 1500) finishCapture("captured");
 }
 
 function suppressMenuIfNeeded(): void {
@@ -234,9 +289,14 @@ async function fire(): Promise<void> {
 function handleHeld(controller: number, names: Set<string>): void {
   const prev = prevNames.get(controller) ?? new Set<string>();
   prevNames.set(controller, names);
-  if (binding.length === 0 || hidrawActive) return;
-  const was = binding.every((name) => prev.has(name));
-  const down = binding.every((name) => names.has(name));
+  const steamNames = new Set(Object.values(ACTION_NAME));
+  const wanted = binding.filter((name) => steamNames.has(name));
+  if (hidrawActive || wanted.length === 0 || wanted.length !== binding.length) {
+    if (!names.has("Steam")) releaseMenu();
+    return;
+  }
+  const was = wanted.every((name) => prev.has(name));
+  const down = wanted.every((name) => names.has(name));
   if (down && !was) {
     suppressMenuIfNeeded();
     void fire();

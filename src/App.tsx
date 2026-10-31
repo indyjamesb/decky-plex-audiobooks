@@ -584,13 +584,15 @@ function BookView({
 }) {
   const [error, setError] = useState("");
   const [starting, setStarting] = useState(false);
+  const [chaptersOpen, setChaptersOpen] = useState(false);
   const book = detail.book;
   if (!book) return null;
-  const resumeLabel = detail.finished
-    ? "Play from the start"
-    : detail.resume_offset_ms > 0 || detail.resume_index > 0
-      ? `Resume at ${formatTime(detail.book_position_ms)}`
-      : "Play";
+  let cursor = 0;
+  const chapters = detail.tracks.map((chapter) => {
+    const start = cursor;
+    cursor += chapter.duration_ms || 0;
+    return { ...chapter, start };
+  });
 
   async function start(trackIndex: number, offsetMs: number) {
     setStarting(true);
@@ -603,7 +605,7 @@ function BookView({
       }
       onStarted();
     } catch {
-      setError("Can't reach the Plex server.");
+      setError("Can't reach your Plex server.");
     } finally {
       setStarting(false);
     }
@@ -628,26 +630,39 @@ function BookView({
           </div>
         </div>
       </PanelSectionRow>
-      <PanelSectionRow>
-        <ButtonItem layout="below" disabled={starting} onClick={() => void start(-1, 0)}>
-          {starting ? "Starting…" : resumeLabel}
-        </ButtonItem>
-      </PanelSectionRow>
+      {chaptersOpen ? (
+        <>
+          <PanelSectionRow>
+            <ButtonItem layout="below" onClick={() => setChaptersOpen(false)}>
+              Back
+            </ButtonItem>
+          </PanelSectionRow>
+          {chapters.map((chapter) => (
+            <PanelSectionRow key={chapter.index}>
+              <ButtonItem layout="below" disabled={starting} onClick={() => void start(chapter.index, 0)}>
+                <div style={{ whiteSpace: "normal", textAlign: "left" }}>
+                  {chapter.title || `Chapter ${chapter.index + 1}`}
+                  <span style={{ opacity: 0.7 }}>{` · ${formatTime(chapter.start)}`}</span>
+                </div>
+              </ButtonItem>
+            </PanelSectionRow>
+          ))}
+        </>
+      ) : (
+        <>
+          <PanelSectionRow>
+            <ButtonItem layout="below" disabled={starting} onClick={() => void start(-1, 0)}>
+              {starting ? "Starting…" : "Resume"}
+            </ButtonItem>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ButtonItem layout="below" disabled={starting} onClick={() => setChaptersOpen(true)}>
+              Chapters
+            </ButtonItem>
+          </PanelSectionRow>
+        </>
+      )}
       <ErrorText text={error} />
-      {detail.tracks.map((chapter) => (
-        <PanelSectionRow key={chapter.index}>
-          <ButtonItem
-            layout="below"
-            disabled={starting}
-            onClick={() => void start(chapter.index, 0)}
-          >
-            <div style={{ whiteSpace: "normal", textAlign: "left" }}>
-              {chapter.title || `Chapter ${chapter.index + 1}`}
-              <span style={{ opacity: 0.7 }}>{` · ${formatTime(chapter.duration_ms)}`}</span>
-            </div>
-          </ButtonItem>
-        </PanelSectionRow>
-      ))}
     </PanelSection>
   );
 }
@@ -655,11 +670,11 @@ function BookView({
 function captureMessage(phase: string, buttons: string[], secondsLeft: number | null): string {
   if (phase === "wait_release") return "Release every button.";
   if (phase === "listen") {
-    const label = buttons.length ? buttons.join(" + ") : "Press the shortcut";
-    if (secondsLeft == null) return `${label}. Release to save.`;
+    const label = buttons.length ? bindingLabel(buttons) : "Press the shortcut";
+    if (secondsLeft == null) return `${label}.`;
     return `${label} · ${secondsLeft.toFixed(1)}s`;
   }
-  if (phase === "done") return buttons.length ? buttons.join(" + ") : "Not set";
+  if (phase === "done") return buttons.length ? bindingLabel(buttons) : "Not set";
   if (phase === "timeout") return "Nothing pressed. Cancelled.";
   return "Cancelled.";
 }
@@ -1011,7 +1026,7 @@ function SettingsView({
     try {
       await loadLibraries(serverUrl, token);
     } catch {
-      setError("Can't reach the Plex server.");
+      setError("Can't reach your Plex server.");
     } finally {
       setBusy(false);
     }

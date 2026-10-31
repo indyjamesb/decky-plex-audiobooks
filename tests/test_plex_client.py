@@ -189,6 +189,13 @@ class PlexClientTests(unittest.TestCase):
         self.assertIn("state=playing", timeline[-1])
         # In-progress reports inflate duration so Plex's 90% watched rule stays past the real end.
         self.assertNotIn("duration=60000", timeline[-1])
+        self.assertIn("ratingKey=22", timeline[-1])
+        self.assertIn("key=%2Flibrary%2Fmetadata%2F22", timeline[-1])
+        self.client.timeline("22", "paused", 15_000, 60_000, play_queue_item_id="99")
+        queued = [path for method, path, _header in Handler.requests if "playQueueItemID" in path]
+        self.assertTrue(queued)
+        self.assertIn("playQueueItemID=99", queued[-1])
+        self.assertIn("state=paused", queued[-1])
         scrobbles = [path for _method, path, _header in Handler.requests if path.startswith("/:/scrobble")]
         self.assertIn("key=21", scrobbles[-1])
         self.assertNotIn("library/metadata", scrobbles[-1])
