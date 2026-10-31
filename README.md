@@ -4,7 +4,7 @@ A Decky Loader plugin for Steam Deck (SteamOS 3.9.x, Game Mode). It plays audiob
 
 This plugin was built with AI coding assistance, and directed and tested on a Steam Deck OLED by the maintainer.
 
-Version 0.1 is a small player. One server, one library, browse and search, background playback, and resume sync.
+Features: one Plex server and library, browse and search, playback in the background while a game runs, resume sync with Plex, an in-game play/pause shortcut (R4 by default; Steam Controller, Xbox, DualSense and Switch Pro buttons also work), a Game volume slider with optional auto-lowering while the book plays, and automatic switching between your local and remote Plex connection.
 
 ## Changelog
 
@@ -188,31 +188,8 @@ Sign-in and playback were confirmed on a Steam Deck OLED outside this environmen
 - Embedded chapters inside one `.m4b`. Next and previous follow Plex tracks. If Plex shows the book as one file, there is one chapter.
 - This environment did not open `/dev/hidraw`. On a Deck, in-game captures confirmed L4 and R4 and a right-stick touch bit. The reader, the Program-button timing, and every other button name were not re-checked here.
 - Whether a back button left unbound in a game’s Steam Input layout still shows up in the hidraw report. The capture was of the physical buttons, not of a game’s layout.
-- Bluetooth Xbox and PlayStation controllers. They are not read in 0.5.0. See the roadmap.
 - Position accuracy during a long stream. The position is wall-clock time since ffplay started, times the speed, plus the seek point. If the stream buffers, the bar can run ahead of the audio. Seeking restarts ffplay, so there is a short gap.
 - Live volume when `pactl` is missing.
-
-## Roadmap
-
-Bluetooth Xbox and PlayStation pads are not in 0.5.0. The in-game shortcut reads the Deck’s built-in controller (`28DE:1205` on hidraw) and does not open evdev devices. A later build could watch those pads with evdev. TODO.
-
-Not in 0.1.1. A separate **Game volume** slider, so a dungeon’s music can drop while the book stays up, is feasible and is not safe enough to ship yet.
-
-SteamOS 3.9 uses PipeWire with a PulseAudio compatibility layer. Per-application volume is a sink-input volume, not a second system volume. Two Decky plugins already do this with `pactl`:
-
-- This plugin’s book slider calls `pactl set-sink-input-volume` on the sink input whose `application.process.id` is the `ffplay` process (`set_process_volume` in `player.py`). If `pactl` is missing, that slider only applies the next time a file starts.
-- [SteamDeck-VolumeMixer](https://github.com/jacklu97/SteamDeck-VolumeMixer) lists every sink input from `pactl list sink-inputs` (by `application.name`) and sets each one with `pactl set-sink-input-volume`. It does not need root. It also does not know which stream is “the game,” and it does not put the old volume back.
-
-Game Mode has no per-game mixer of its own. On the desktop, the sound panel’s Playback Streams list shows the game, often under the audio engine’s name (FMOD, Unity, and similar) rather than the game title. That is the same stream `pactl` would change. See the [Steam Deck discussion on muting one game](https://steamcommunity.com/app/1675200/discussions/0/6955341523712010713/).
-
-A later build can add one slider that:
-
-1. Finds the foreground game. Steam’s running app is not the process that owns the audio. Proton and gamescope put the stream on a child process, and one game can open several streams. Matching has to walk that process tree, the same approach as [hyprvol](https://gist.github.com/Dregu/aa748bebc7c3aeddd3ceb55c0f046c5d) (gamescope, Proton, and multiple streams per window).
-2. Remembers each matched sink input’s current volume, then sets only those inputs. Never touch the book’s `ffplay` input, and do nothing if the match is empty or ambiguous.
-3. Looks the inputs up again on each slider move. Sink-input ids change when a game recreates its stream.
-4. Restores the remembered volumes when the slider returns to its original level, when that game exits, and in plugin unload. If the plugin dies first, the game stays quiet until it opens a new stream.
-
-That last step is why this stays off 0.1.1. A wrong pid match would turn down the wrong app, and a crash would leave the game ducked. `wpctl set-volume` is the native PipeWire equivalent of the same sink-input change ([PipeWire’s Pulse migration notes](https://gitlab.freedesktop.org/pipewire/pipewire/-/wikis/Migrate-PulseAudio)); it does not make the match any safer. The book volume slider stays as it is.
 
 ## Layout
 
