@@ -3,6 +3,8 @@ import unittest
 from progress import (
     AudioTrack,
     atempo_filters,
+    snap_speed,
+    sort_books,
     book_position,
     choose_resume,
     compute_position_ms,
@@ -158,10 +160,44 @@ class ReportMathTests(unittest.TestCase):
 
     def test_atempo_chain(self):
         self.assertEqual(atempo_filters(1.0), [])
+        self.assertEqual(atempo_filters(1.15), ["atempo=1.1500"])
+        self.assertEqual(atempo_filters(1.2), ["atempo=1.2000"])
         self.assertEqual(atempo_filters(1.5), ["atempo=1.5000"])
         self.assertEqual(atempo_filters(2.5), ["atempo=2.0", "atempo=1.2500"])
+        self.assertEqual(atempo_filters(2.55), ["atempo=2.0", "atempo=1.2750"])
         self.assertEqual(atempo_filters(3.0), ["atempo=2.0", "atempo=1.5000"])
+        self.assertEqual(atempo_filters(0.5), ["atempo=0.5000"])
         self.assertEqual(atempo_filters(0.75), ["atempo=0.7500"])
+
+    def test_speed_steps_include_one_point_two(self):
+        self.assertEqual(snap_speed(1.2), 1.2)
+        self.assertEqual(snap_speed(1.17), 1.15)
+        self.assertEqual(snap_speed(1.18), 1.2)
+        self.assertEqual(snap_speed(0.49), 0.5)
+        self.assertEqual(snap_speed(3.2), 3.0)
+        self.assertEqual(snap_speed(2.55), 2.55)
+
+    def test_book_sort_recently_played_falls_back(self):
+        books = [
+            {"title": "Zebra", "author": "Ann", "last_viewed_at": 0, "added_at": 50},
+            {"title": "Alpha", "author": "Bea", "last_viewed_at": 10, "added_at": 1},
+            {"title": "Middle", "author": "Ann", "last_viewed_at": 10, "added_at": 99},
+            {"title": "New", "author": "Cara", "last_viewed_at": 0, "added_at": 80},
+        ]
+        played = [book["title"] for book in sort_books(books, "recently_played")]
+        self.assertEqual(played, ["Middle", "Alpha", "New", "Zebra"])
+        self.assertEqual(
+            [book["title"] for book in sort_books(books, "title")],
+            ["Alpha", "Middle", "New", "Zebra"],
+        )
+        self.assertEqual(
+            [book["title"] for book in sort_books(books, "author")],
+            ["Middle", "Zebra", "Alpha", "New"],
+        )
+        self.assertEqual(
+            [book["title"] for book in sort_books(books, "recently_added")],
+            ["Middle", "New", "Zebra", "Alpha"],
+        )
 
     def test_immediate_exit_on_a_long_file_is_failure(self):
         self.assertEqual(playback_outcome(0, elapsed_wall_s=0.2, remaining_ms=3_600_000, speed=1), "failed")

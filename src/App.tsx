@@ -20,6 +20,8 @@ import {
   getStatus,
   listBooks,
   listServers,
+  setBookSort,
+  setPlayPauseTrigger,
   nextChapter,
   playBook,
   pollSignIn,
@@ -35,7 +37,8 @@ import {
   testConnection,
   togglePlayback,
 } from "./api";
-import { formatSpeed, formatTime, nextSpeed } from "./format";
+import { setComboRecording, setShortcutConfig } from "./controllerShortcut";
+import { BOOK_SORTS, BookSortId, formatSpeed, formatTime, snapSpeed, stepSpeed } from "./format";
 
 type View = "player" | "library" | "book" | "settings";
 
@@ -185,7 +188,9 @@ function PlayerView({
   onRun: (action: () => Promise<{ success: boolean; message?: string }>) => Promise<void>;
 }) {
   const [volume, setLocalVolume] = useState<number | null>(null);
+  const [localSpeed, setLocalSpeed] = useState<number | null>(null);
   const volumeTimer = useRef<number | null>(null);
+  const speedTimer = useRef<number | null>(null);
   const shownVolume = volume !== null ? volume : status?.volume ?? 80;
 
   useEffect(() => {
@@ -197,6 +202,7 @@ function PlayerView({
   const book = status?.has_book ? status : null;
   const playing = Boolean(status?.playing);
   const speed = status?.speed || 1;
+  const shownSpeed = localSpeed !== null ? localSpeed : snapSpeed(speed);
 
   return (
     <>
@@ -295,9 +301,49 @@ function PlayerView({
           </Focusable>
         </PanelSectionRow>
         <PanelSectionRow>
-          <ButtonItem layout="below" onClick={() => void onRun(() => setSpeed(nextSpeed(speed)))} disabled={!book}>
-            {`Speed ${formatSpeed(speed)}`}
-          </ButtonItem>
+          <Focusable style={{ display: "flex", gap: "4px", width: "100%", alignItems: "center" }}>
+            <DialogButton
+              style={{ flex: 1 }}
+              onClick={() => {
+                const next = stepSpeed(shownSpeed, -1);
+                setLocalSpeed(next);
+                void onRun(() => setSpeed(next));
+              }}
+            >
+              −0.05
+            </DialogButton>
+            <div style={{ flex: 1, textAlign: "center", fontWeight: 700 }}>{formatSpeed(shownSpeed)}</div>
+            <DialogButton
+              style={{ flex: 1 }}
+              onClick={() => {
+                const next = stepSpeed(shownSpeed, 1);
+                setLocalSpeed(next);
+                void onRun(() => setSpeed(next));
+              }}
+            >
+              +0.05
+            </DialogButton>
+          </Focusable>
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <SliderField
+            label="Speed"
+            description="0.50x to 3.00x in steps of 0.05."
+            value={shownSpeed}
+            min={0.5}
+            max={3}
+            step={0.05}
+            showValue={true}
+            onChange={(value) => {
+              const next = snapSpeed(value);
+              setLocalSpeed(next);
+              if (speedTimer.current !== null) window.clearTimeout(speedTimer.current);
+              speedTimer.current = window.setTimeout(() => {
+                speedTimer.current = null;
+                void onRun(() => setSpeed(next));
+              }, 300);
+            }}
+          />
         </PanelSectionRow>
         <PanelSectionRow>
           <ButtonItem layout="below" onClick={() => void onRun(() => stopPlayback())} disabled={!book}>
@@ -326,13 +372,14 @@ function PlayerView({
         {status?.track_progress === false && (
           <PanelSectionRow>
             <div style={{ whiteSpace: "normal", fontSize: "0.85em" }}>
-              This library does not have Store track progress turned on. Plex may not keep a resume point. Edit the
-              library in Plex, open Advanced, and enable Store track progress.
+              Resume in Plex: Off. Plex’s “Store track progress” is off for this library, so Plex will not keep your
+              spot. Turn it on in Plex web: Manage Library, Edit, Advanced. This plugin cannot change that setting.
             </div>
           </PanelSectionRow>
         )}
         <ErrorText text={error} />
       </PanelSection>
+      <PlayPauseTrigger />
       <PanelSection title="Browse">
         <PanelSectionRow>
           <ButtonItem layout="below" onClick={onLibrary}>
@@ -357,17 +404,18 @@ function LibraryView({
   onSelectBook: () => void;
 }) {
   const [query, setQuery] = useState("");
+  const [sortId, setSortId] = useState<BookSortId>("recently_played");
   const [books, setBooks] = useState<BookSummary[]>([]);
   const [total, setTotal] = useState(0);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<BookDetail | null>(null);
 
-  async function load(search: string, start: number, append: boolean) {
+  async function load(search: string, start: number, append: boolean, sort: BookSortId = sortId) {
     setLoading(true);
     setError("");
     try {
-      const result = await listBooks(search, start);
+      const result = await listBooks(search, start, sort);
       if (!result.success) {
         setError(result.message || "Couldn't load the library.");
         if (!append) setBooks([]);
@@ -383,7 +431,22 @@ function LibraryView({
   }
 
   useEffect(() => {
-    void load("", 0, false);
+    let stop = false;
+    void getSettings()
+      .then((settings) => {
+        if (stop) return;
+        const next = BOOK_SORTS.some((item) => item.id === settings.book_sort)
+          ? (settings.book_sort as BookSortId)
+          : "recently_played";
+        setSortId(next);
+        return load("", 0, false, next);
+      })
+      .catch(() => {
+        if (!stop) void load("", 0, false, "recently_played");
+      });
+    return () => {
+      stop = true;
+    };
   }, []);
 
   if (selected?.book) {
@@ -418,6 +481,25 @@ function LibraryView({
           Search
         </ButtonItem>
       </PanelSectionRow>
+      {BOOK_SORTS.map((item) => (
+        <PanelSectionRow key={item.id}>
+          <ButtonItem
+            layout="below"
+            onClick={() => {
+              setSortId(item.id);
+              void setBookSort(item.id);
+              void load(query.trim(), 0, false, item.id);
+            }}
+          >
+            <div style={{ whiteSpace: "normal", textAlign: "left" }}>
+              <div style={{ fontWeight: sortId === item.id ? 700 : 400 }}>{item.label}</div>
+              <div style={{ opacity: 0.75, fontSize: "0.85em" }}>
+                {sortId === item.id ? "Selected sort" : "Tap to sort"}
+              </div>
+            </div>
+          </ButtonItem>
+        </PanelSectionRow>
+      ))}
       {loading && books.length === 0 && (
         <PanelSectionRow>
           <div>Loading books…</div>
@@ -553,6 +635,172 @@ function BookView({
           </ButtonItem>
         </PanelSectionRow>
       ))}
+    </PanelSection>
+  );
+}
+
+function PlayPauseTrigger() {
+  const [mode, setMode] = useState<"off" | "back" | "combo">("off");
+  const [backButton, setBackButton] = useState<"L4" | "L5" | "R4" | "R5">("L4");
+  const [combo, setCombo] = useState<string[]>(["Select", "Y"]);
+  const [held, setHeld] = useState<string[]>([]);
+  const [recording, setRecording] = useState(false);
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    let stop = false;
+    void getSettings()
+      .then((settings) => {
+        if (stop) return;
+        const nextMode = settings.play_pause_mode === "back" || settings.play_pause_mode === "combo"
+          ? settings.play_pause_mode
+          : "off";
+        const nextBack = settings.play_pause_back === "L5" || settings.play_pause_back === "R4" || settings.play_pause_back === "R5"
+          ? settings.play_pause_back
+          : "L4";
+        const nextCombo = (settings.play_pause_combo || []).filter((name) => name.length > 0);
+        setMode(nextMode);
+        setBackButton(nextBack);
+        if (nextCombo.length >= 2) setCombo(nextCombo);
+        setShortcutConfig({ mode: nextMode, backButton: nextBack, combo: nextCombo.length >= 2 ? nextCombo : ["Select", "Y"] });
+      })
+      .catch(() => undefined);
+    return () => {
+      stop = true;
+      setComboRecording(false, null);
+    };
+  }, []);
+
+  async function save(nextMode: "off" | "back" | "combo", nextBack: "L4" | "L5" | "R4" | "R5", nextCombo: string[]) {
+    setMessage("");
+    const result = await setPlayPauseTrigger(nextMode, nextBack, nextCombo);
+    if (!result.success) {
+      setMessage(result.message || "Couldn't save that button.");
+      return;
+    }
+    const savedCombo = result.play_pause_combo || nextCombo;
+    setMode(nextMode);
+    setBackButton(nextBack);
+    setCombo(savedCombo);
+    setShortcutConfig({ mode: nextMode, backButton: nextBack, combo: savedCombo });
+  }
+
+  return (
+    <PanelSection title="Play/pause button">
+      <PanelSectionRow>
+        <div style={{ whiteSpace: "normal", fontSize: "0.85em" }}>
+          Off by default. A single back button is read from Steam’s controller state, the same feed MagicPods and
+          Decky Recorder use. Leave that button unbound in the game’s Steam Input layout so the game ignores it. A
+          combo can still reach the game. Not tested here while a game is focused, or with a docked Steam Controller.
+        </div>
+      </PanelSectionRow>
+      {(["off", "back", "combo"] as const).map((item) => (
+        <PanelSectionRow key={item}>
+          <ButtonItem
+            layout="below"
+            onClick={() => void save(item, backButton, combo)}
+          >
+            <div style={{ textAlign: "left" }}>
+              <div style={{ fontWeight: mode === item ? 700 : 400 }}>
+                {item === "off" ? "Off" : item === "back" ? "One back button" : "Button combo"}
+              </div>
+              <div style={{ opacity: 0.75, fontSize: "0.85em" }}>{mode === item ? "Selected" : "Tap to use"}</div>
+            </div>
+          </ButtonItem>
+        </PanelSectionRow>
+      ))}
+      {mode === "back" && (
+        <>
+          {(["L4", "L5", "R4", "R5"] as const).map((button) => (
+            <PanelSectionRow key={button}>
+              <ButtonItem layout="below" onClick={() => void save("back", button, combo)}>
+                <div style={{ textAlign: "left" }}>
+                  <div style={{ fontWeight: backButton === button ? 700 : 400 }}>{button}</div>
+                  <div style={{ opacity: 0.75, fontSize: "0.85em" }}>
+                    {backButton === button ? "Selected — one press toggles play/pause" : "Tap to select"}
+                  </div>
+                </div>
+              </ButtonItem>
+            </PanelSectionRow>
+          ))}
+        </>
+      )}
+      {mode === "combo" && (
+        <>
+          <PanelSectionRow>
+            <div style={{ whiteSpace: "normal", fontSize: "0.85em" }}>
+              Pick at least two buttons, or hold them and tap “Use the buttons I’m holding”. View/Select is a better
+              partner than a face button the game already uses. Holding Steam may also open the overlay.
+            </div>
+          </PanelSectionRow>
+          {["Select", "Start", "Y", "X", "B", "A", "L1", "R1", "Steam"].map((button) => {
+            const on = combo.includes(button);
+            return (
+              <PanelSectionRow key={button}>
+                <ButtonItem
+                  layout="below"
+                  onClick={() => {
+                    const next = on ? combo.filter((name) => name !== button) : combo.concat(button);
+                    setCombo(next);
+                  }}
+                >
+                  <div style={{ textAlign: "left" }}>
+                    <div style={{ fontWeight: on ? 700 : 400 }}>{button === "Select" ? "View / Select" : button}</div>
+                    <div style={{ opacity: 0.75, fontSize: "0.85em" }}>{on ? "In the combo" : "Tap to add"}</div>
+                  </div>
+                </ButtonItem>
+              </PanelSectionRow>
+            );
+          })}
+          <PanelSectionRow>
+            <ButtonItem
+              layout="below"
+              onClick={() => {
+                if (recording) {
+                  setRecording(false);
+                  setComboRecording(false, null);
+                  return;
+                }
+                setRecording(true);
+                setHeld([]);
+                setComboRecording(true, (buttons) => setHeld(buttons));
+              }}
+            >
+              {recording ? "Stop listening for buttons" : "Listen for the buttons I’m holding"}
+            </ButtonItem>
+          </PanelSectionRow>
+          {recording && (
+            <PanelSectionRow>
+              <div style={{ whiteSpace: "normal" }}>
+                {held.length > 0 ? `Holding: ${held.join(" + ")}` : "Hold the buttons, then save."}
+              </div>
+            </PanelSectionRow>
+          )}
+          <PanelSectionRow>
+            <ButtonItem
+              layout="below"
+              onClick={() => {
+                const next = held.length >= 2 ? held : combo;
+                setComboRecording(false, null);
+                setRecording(false);
+                void save("combo", backButton, next);
+              }}
+            >
+              {held.length >= 2 ? "Use the buttons I’m holding" : "Save this combo"}
+            </ButtonItem>
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <div style={{ whiteSpace: "normal", fontSize: "0.85em" }}>
+              {combo.length >= 2 ? `Combo: ${combo.join(" + ")}. Hold them together briefly.` : "Pick two buttons."}
+            </div>
+          </PanelSectionRow>
+        </>
+      )}
+      {message && (
+        <PanelSectionRow>
+          <div style={{ whiteSpace: "normal" }}>{message}</div>
+        </PanelSectionRow>
+      )}
     </PanelSection>
   );
 }
@@ -902,29 +1150,56 @@ function SettingsView({
         </PanelSection>
       )}
       {libraries.length > 0 && (
-        <PanelSection title="Library">
-          {libraries.map((library) => (
-            <PanelSectionRow key={library.key}>
-              <ButtonItem layout="below" onClick={() => setLibraryKey(library.key)}>
-                <div style={{ whiteSpace: "normal", textAlign: "left" }}>
-                  {library.key === libraryKey ? "● " : "○ "}
-                  {library.title}
-                  {library.track_progress === false ? " · track progress off" : ""}
-                </div>
-              </ButtonItem>
-            </PanelSectionRow>
-          ))}
-          {selected?.track_progress === false && (
+        <PanelSection title="Choose a library">
+          <PanelSectionRow>
+            <div style={{ whiteSpace: "normal" }}>
+              Choose the Plex library that holds your audiobooks. Tap one name, then Use this library. Only one
+              library is used at a time. This does not turn settings on or off.
+            </div>
+          </PanelSectionRow>
+          {libraries.map((library) => {
+            const chosen = library.key === libraryKey;
+            return (
+              <PanelSectionRow key={library.key}>
+                <ButtonItem layout="below" onClick={() => setLibraryKey(library.key)}>
+                  <div style={{ whiteSpace: "normal", textAlign: "left" }}>
+                    <div style={{ fontWeight: chosen ? 700 : 400 }}>{library.title}</div>
+                    <div style={{ opacity: 0.75, fontSize: "0.85em" }}>
+                      {chosen ? "Selected" : "Tap to select"}
+                    </div>
+                  </div>
+                </ButtonItem>
+              </PanelSectionRow>
+            );
+          })}
+          {selected && (
             <PanelSectionRow>
               <div style={{ whiteSpace: "normal", fontSize: "0.85em" }}>
-                Turn on Store track progress for this library in Plex (Manage Library, Edit, Advanced). Without it,
-                Plex does not keep a resume point that other clients can pick up.
+                {selected.track_progress === false && (
+                  <>
+                    Resume in Plex: Off. Resume is controlled by Plex’s server setting “Store track progress”
+                    (Plex web: Manage Library, Edit, Advanced). This plugin cannot change it. With it off, Plex only
+                    marks whole tracks played and will not keep your spot for other apps such as Prologue.
+                  </>
+                )}
+                {selected.track_progress === true && (
+                  <>
+                    Resume in Plex: On. Plex’s “Store track progress” is on for this library, so your place in a file
+                    can be saved for other Plex apps.
+                  </>
+                )}
+                {selected.track_progress == null && (
+                  <>
+                    Resume in Plex: Unknown. This plugin could not read whether “Store track progress” is on. That
+                    Plex setting (Manage Library, Edit, Advanced) controls whether other apps can resume mid-track.
+                  </>
+                )}
               </div>
             </PanelSectionRow>
           )}
           <PanelSectionRow>
-            <ButtonItem layout="below" disabled={busy} onClick={() => void onSave()}>
-              Save library
+            <ButtonItem layout="below" disabled={busy || !libraryKey} onClick={() => void onSave()}>
+              Use this library
             </ButtonItem>
           </PanelSectionRow>
         </PanelSection>

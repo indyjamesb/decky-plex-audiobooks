@@ -24,7 +24,7 @@ import urllib.request
 from datetime import datetime, timezone
 
 PRODUCT_NAME = "Plex Audiobooks"
-PRODUCT_VERSION = "0.1.0"
+PRODUCT_VERSION = "0.1.1"
 PLEX_TV = "https://plex.tv"
 LINK_URL = "https://plex.tv/link"
 

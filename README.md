@@ -9,13 +9,13 @@ Version 0.1 is a small player. One server, one library, browse and search, backg
 Build the zip on a computer (or on the Deck, if Node is installed), then copy it over. Decky does not need its plugin store for this.
 
 1. Install [Decky Loader](https://decky.xyz/) if it is not already installed.
-2. Copy `release/plex-audiobooks-v0.1.0.zip` to the Deck. The zip in this repository is already built.
+2. Copy `release/plex-audiobooks-v0.1.1.zip` to the Deck. The zip in this repository is already built.
 3. In Desktop Mode, or over SSH:
 
 ```bash
 mkdir -p ~/homebrew/plugins
 cd ~/homebrew/plugins
-unzip -o /path/to/plex-audiobooks-v0.1.0.zip
+unzip -o /path/to/plex-audiobooks-v0.1.1.zip
 ```
 
 The zip already contains a `plex-audiobooks` folder. You should end up with:
@@ -46,15 +46,13 @@ pnpm test
 pnpm run package
 ```
 
-`pnpm test` runs the Python unit tests. `pnpm run package` writes `release/plex-audiobooks-v0.1.0.zip`.
+`pnpm test` runs the Python unit tests. `pnpm run package` writes `release/plex-audiobooks-v0.1.1.zip`.
 
 `pnpm run build` only produces `dist/index.js`. A manual install without the zip is the plugin directory containing `dist/`, `main.py`, `player.py`, `plex.py`, `plex_auth.py`, `progress.py`, `plugin.json`, `package.json`, `LICENSE`, `NOTICE`, and `README.md`.
 
 ## Setup
 
 Audiobooks in Plex are a **Music** library. There is no separate audiobook library type. Artist is the author, album is the book, and each file is a chapter or part. A single `.m4b` is one file.
-
-In Plex, edit that library, open **Advanced**, and turn on **Store track progress**. Without it, Plex does not keep a per-file resume point for music, so other Plex clients cannot resume in the middle of a file.
 
 ### Sign in
 
@@ -70,17 +68,26 @@ The plugin identifies itself to Plex as **Plex Audiobooks**, with one `X-Plex-Cl
 
 **Advanced: URL and token** is the fallback when link sign-in is not usable. Enter a server URL such as `http://10.0.0.91:32400` (`10.0.0.91:32400` is accepted and treated as `http://`) and a Plex token. In the Plex web app, play any item, open the browser's network panel, and copy `X-Plex-Token`. Plex's own article is [Finding an authentication token](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/). Leave the token field blank later to keep the one already saved.
 
-Test the connection, pick the Music library, and save. The library list is only Music sections. If Plex reports that Store track progress is off, the panel says so.
+Test the connection, choose the Music library that holds the books, and press **Use this library**. The list is a picker, not a switch. The library list is only Music sections.
+
+## Resume and Store track progress
+
+Whether Plex keeps your place in a file is a setting on the library in Plex Media Server, not a switch in this plugin. The plugin can read it and cannot change it.
+
+In Plex web: open the library, **Manage Library**, **Edit**, **Advanced**, and turn on **Store track progress**.
+
+With that setting on, a position from another Plex audiobook app showed up in Plex as the track’s `viewOffset`, and this plugin can resume there and write the position back. With it off, Plex only stored `viewCount` (the track marked played). It did not keep a spot in the middle of a file, so other Plex apps cannot resume mid-track. The panel shows **Resume in Plex: On** or **Off** for the library you select.
 
 ## How to listen
 
-- **Library** lists books (Plex albums) with the author. Search matches album titles. Open a book to see the cover, author, and files.
+- **Library** lists books (Plex albums) with the author. The default order is recently played (`lastViewedAt`, then `addedAt`, then title). You can also sort by title, author, or recently added. The choice is saved. Search matches album titles. Open a book to see the cover, author, and files.
 - **Play / Resume** reads Plex's saved progress and starts there. A finished book starts over.
 - Playback is an `ffplay` process started by the Python backend. Closing the Quick Access Menu does not stop it, and a focused game does not stop it, as long as the Deck stays awake.
 - **Pause**, **stop**, **-30s**, **+30s**, **previous**, and **next** are in the panel. Previous restarts the current file once you are a few seconds in; from the start of a file it goes back one file. Next marks the current file played in Plex and starts the next one.
-- **Speed** cycles 0.75× through 3×. Changing speed restarts the file at the current position.
+- **Speed** moves in steps of 0.05 from 0.50x to 3.00x, so 1.20x is a real step. The last speed is saved. Changing it restarts the file at the current position.
 - **Volume** is the audiobook only. On SteamOS it is applied with `pactl` when that exists. Otherwise it is applied the next time a file starts.
 - The book bar is your place in the whole book. The chapter bar is your place in the current file.
+- **Play/pause button** is off until you turn it on. Choose one Deck back button (L4, L5, R4, or R5), or a combo of two or more buttons for a pad that has no back buttons. One press of the back button toggles playback. A combo has to be held together briefly. Leave a back button unbound in that game’s Steam Input layout so the game ignores it. A combo can still be seen by the game. This uses `SteamClient.Input.RegisterForControllerStateChanges`, the same callback [MagicPods](https://github.com/steam3d/MagicPodsDecky) and [Decky Recorder](https://github.com/SDH-Stewardship/decky-recorder-fork) use. L4 and R4 are in `ulUpperButtons`; L5 and R5 are in `ulButtons`. It has not been tested here while a game is focused, or with a docked Steam Controller.
 
 ### Progress sync
 
@@ -103,7 +110,7 @@ This environment has no Steam Deck and no Plex server. These checks were run:
 
 ## Not tested
 
-Nothing below has been tried on hardware or against a real Plex Media Server. Treat it as unverified until you do.
+Sign-in and playback were confirmed on a Steam Deck outside this environment. The items below were not verified here.
 
 - Game Mode: audio continuing under a focused game, mixing with game audio, and the Quick Access Menu opening and closing during playback.
 - The Deck's PipeWire socket (`/run/user/<uid>/pulse/native`) and Decky's bundled `LD_LIBRARY_PATH`, which is why ffplay is launched with a cleaned environment. That failure mode is real on Decky (Museck issues around ffplay dying instantly) but was not reproduced here.
@@ -112,6 +119,7 @@ Nothing below has been tried on hardware or against a real Plex Media Server. Tr
 - Sleep. When the Deck sleeps, playback stops. Nothing in this plugin keeps the device awake.
 - Bluetooth output, remote Plex URLs, and HTTPS servers with a private certificate. The client verifies HTTPS certificates.
 - Embedded chapters inside one `.m4b`. Next and previous follow Plex tracks. If Plex shows the book as one file, there is one chapter.
+- The play/pause button while a game is focused, and from an external Steam Controller while the Deck is docked. The code listens to `SteamClient.Input.RegisterForControllerStateChanges` (the callback MagicPods and Decky Recorder use, including L4/R4 in `ulUpperButtons`). This environment cannot open Game Mode.
 - Position accuracy during a long stream. The position is wall-clock time since ffplay started, times the speed, plus the seek point. If the stream buffers, the bar can run ahead of the audio. Seeking restarts ffplay, so there is a short gap.
 - Live volume when `pactl` is missing.
 

@@ -258,6 +258,65 @@ def compute_position_ms(
     return position
 
 
+BOOK_SORTS = ("recently_played", "title", "author", "recently_added")
+
+PLEX_SORT = {
+    "recently_played": "lastViewedAt:desc",
+    "title": "titleSort:asc",
+    "author": "artist.titleSort:asc",
+    "recently_added": "addedAt:desc",
+}
+
+
+def normalize_book_sort(sort_id: object) -> str:
+    text = str(sort_id or "")
+    return text if text in BOOK_SORTS else "recently_played"
+
+
+def sort_books(books: list[dict], sort_id: object) -> list[dict]:
+    """Order a page of albums.
+
+    Recently played uses ``lastViewedAt``, then ``addedAt``, then title, so a
+    book Plex has never opened still has a stable place.
+    """
+
+    chosen = normalize_book_sort(sort_id)
+
+    def title_key(book: dict) -> str:
+        return str(book.get("title") or "").lower()
+
+    def author_key(book: dict) -> str:
+        return str(book.get("author") or "").lower()
+
+    def viewed(book: dict) -> int:
+        return int(book.get("last_viewed_at") or 0)
+
+    def added(book: dict) -> int:
+        return int(book.get("added_at") or 0)
+
+    if chosen == "title":
+        return sorted(books, key=title_key)
+    if chosen == "author":
+        return sorted(books, key=lambda book: (author_key(book), title_key(book)))
+    if chosen == "recently_added":
+        return sorted(books, key=lambda book: (-added(book), title_key(book)))
+    return sorted(books, key=lambda book: (-viewed(book), -added(book), title_key(book)))
+
+
+def snap_speed(speed: object) -> float:
+    """Nearest 0.05 step from 0.50 through 3.00. 1.2 lands on 1.2 exactly."""
+
+    try:
+        value = float(speed)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 1.0
+    if value != value:
+        return 1.0
+    steps = round((value - 0.5) / 0.05)
+    steps = max(0, min(50, steps))
+    return round(0.5 + steps * 0.05, 2)
+
+
 def atempo_filters(speed: float) -> list[str]:
     """ffmpeg ``atempo`` chain for a playback rate. Empty at 1x.
 

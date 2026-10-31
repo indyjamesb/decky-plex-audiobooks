@@ -19,16 +19,23 @@ from progress import (
     AudioTrack,
     book_position,
     choose_resume,
+    normalize_book_sort,
     playback_outcome,
     previous_target,
     reported_position_ms,
     skip_position,
+    snap_speed,
+    sort_books,
     track_is_complete,
 )
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 REPORT_INTERVAL_S = 15
-SPEEDS = (0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0)
+BACK_BUTTONS = ("L4", "L5", "R4", "R5")
+COMBO_BUTTONS = (
+    "Select", "Start", "Steam", "A", "B", "X", "Y", "L1", "R1", "L3", "R3",
+    "L4", "L5", "R4", "R5",
+)
 
 DEFAULTS = {
     "server_url": "",
@@ -44,6 +51,10 @@ DEFAULTS = {
     "client_id": "",
     "speed": 1.0,
     "volume": 80,
+    "book_sort": "recently_played",
+    "play_pause_mode": "off",
+    "play_pause_back": "L4",
+    "play_pause_combo": ["Select", "Y"],
 }
 
 
@@ -198,6 +209,10 @@ class Plugin:
             "track_progress": self.settings.get("track_progress"),
             "speed": speed,
             "volume": int(self.settings.get("volume") if self.settings.get("volume") is not None else 80),
+            "book_sort": normalize_book_sort(self.settings.get("book_sort")),
+            "play_pause_mode": self._play_pause_mode(),
+            "play_pause_back": self._play_pause_back(),
+            "play_pause_combo": self._play_pause_combo(),
         }
 
     async def save_settings(self, server_url: str, token: str, library_key: str, library_title: str, track_progress):
@@ -416,10 +431,57 @@ class Plugin:
     # Library
     # ------------------------------------------------------------------
 
-    async def list_books(self, query: str = "", start: int = 0):
+    async def set_book_sort(self, sort_id: str):
+        self.settings["book_sort"] = normalize_book_sort(sort_id)
+        await self._save_settings()
+        return {"success": True, "book_sort": self.settings["book_sort"]}
+
+    async def set_play_pause_trigger(self, mode: str, back_button: str, combo: list):
+        chosen = str(mode or "")
+        if chosen not in ("off", "back", "combo"):
+            chosen = "off"
+        back = str(back_button or "")
+        if back not in BACK_BUTTONS:
+            back = "L4"
+        cleaned: list[str] = []
+        if isinstance(combo, list):
+            for item in combo:
+                name = str(item)
+                if name in COMBO_BUTTONS and name not in cleaned:
+                    cleaned.append(name)
+        if chosen == "combo" and len(cleaned) < 2:
+            return {"success": False, "message": "A combo needs at least two buttons."}
+        self.settings["play_pause_mode"] = chosen
+        self.settings["play_pause_back"] = back
+        self.settings["play_pause_combo"] = cleaned or ["Select", "Y"]
+        await self._save_settings()
+        return {
+            "success": True,
+            "play_pause_mode": chosen,
+            "play_pause_back": back,
+            "play_pause_combo": self.settings["play_pause_combo"],
+        }
+
+    def _play_pause_mode(self) -> str:
+        mode = str(self.settings.get("play_pause_mode") or "off")
+        return mode if mode in ("off", "back", "combo") else "off"
+
+    def _play_pause_back(self) -> str:
+        back = str(self.settings.get("play_pause_back") or "L4")
+        return back if back in BACK_BUTTONS else "L4"
+
+    def _play_pause_combo(self) -> list[str]:
+        raw = self.settings.get("play_pause_combo")
+        if not isinstance(raw, list):
+            return ["Select", "Y"]
+        cleaned = [str(item) for item in raw if str(item) in COMBO_BUTTONS]
+        return cleaned or ["Select", "Y"]
+
+    async def list_books(self, query: str = "", start: int = 0, sort_id: str = ""):
         problem = self._configured_message()
         if problem:
             return {"success": False, "message": problem, "books": [], "total": 0}
+        sort_name = normalize_book_sort(sort_id or self.settings.get("book_sort"))
         client = self._client()
         try:
             result = await _to_thread(
@@ -427,6 +489,7 @@ class Plugin:
                     self.settings["library_key"],
                     query=query or "",
                     start=int(start or 0),
+                    sort_id=sort_name,
                 )
             )
         except PlexError as err:
@@ -434,13 +497,14 @@ class Plugin:
         except Exception:
             decky.logger.error("Listing books failed")
             return {"success": False, "message": "Couldn't reach the Plex server.", "books": [], "total": 0}
-        books = result.get("books") or []
+        books = sort_books(result.get("books") or [], sort_name)
         await self._attach_covers(client, books)
         return {
             "success": True,
             "books": [_public_book(book) for book in books],
             "total": result.get("total") or 0,
             "start": result.get("start") or 0,
+            "sort": sort_name,
         }
 
     async def get_book(self, album_key: str):
@@ -674,11 +738,7 @@ class Plugin:
     # ------------------------------------------------------------------
 
     def _nearest_speed(self, speed: object) -> float:
-        try:
-            value = float(speed)  # type: ignore[arg-type]
-        except (TypeError, ValueError):
-            return 1.0
-        return min(SPEEDS, key=lambda item: abs(item - value))
+        return snap_speed(speed)
 
     def _current_offset(self) -> int:
         if self.player is not None and self.player.active:

@@ -18,7 +18,7 @@ import urllib.parse
 import urllib.request
 
 from plex_auth import PRODUCT_NAME, PRODUCT_VERSION, PlexError, _reason, client_headers, ssl_context
-from progress import AudioTrack, timeline_duration_ms
+from progress import AudioTrack, PLEX_SORT, normalize_book_sort, timeline_duration_ms
 
 _IDENTIFIER = "com.plexapp.plugins.library"
 _UNREACHABLE = (
@@ -55,6 +55,8 @@ def parse_book(meta: dict) -> dict:
         "leaf_count": _as_int(meta.get("leafCount")),
         "viewed_leaf_count": _as_int(meta.get("viewedLeafCount")),
         "year": meta.get("year"),
+        "last_viewed_at": _as_int(meta.get("lastViewedAt")),
+        "added_at": _as_int(meta.get("addedAt")),
     }
 
 
@@ -221,19 +223,28 @@ class PlexClient:
             return None
         return parse_track_progress_flag(payload, text)
 
-    def list_books(self, section_key: str, *, query: str = "", start: int = 0, size: int = 30) -> dict:
+    def list_books(
+        self,
+        section_key: str,
+        *,
+        query: str = "",
+        start: int = 0,
+        size: int = 30,
+        sort_id: str = "recently_played",
+    ) -> dict:
         quoted_section = urllib.parse.quote(str(section_key), safe="")
         start = max(0, int(start))
         size = max(1, min(60, int(size)))
         query = (query or "").strip()
+        sort_key = PLEX_SORT[normalize_book_sort(sort_id)]
         if query:
             path = (
                 f"/library/sections/{quoted_section}/search?type=9"
-                f"&query={urllib.parse.quote(query)}&limit={size}"
+                f"&query={urllib.parse.quote(query)}&limit={size}&sort={urllib.parse.quote(sort_key)}"
             )
         else:
             path = (
-                f"/library/sections/{quoted_section}/all?type=9&sort=titleSort:asc"
+                f"/library/sections/{quoted_section}/all?type=9&sort={urllib.parse.quote(sort_key)}"
                 f"&X-Plex-Container-Start={start}&X-Plex-Container-Size={size}"
             )
         payload, _text = self._get_json(path, timeout=20)

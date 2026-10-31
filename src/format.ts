@@ -9,13 +9,27 @@ export function formatTime(ms: number): string {
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
-export const SPEEDS = [0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
+/** Nearest 0.05 step from 0.50 through 3.00. 1.2 stays 1.2. */
+export function snapSpeed(value: number): number {
+  if (!Number.isFinite(value)) return 1;
+  const steps = Math.round((value - 0.5) / 0.05);
+  const clamped = Math.max(0, Math.min(50, steps));
+  return Math.round((0.5 + clamped * 0.05) * 100) / 100;
+}
 
-export function nextSpeed(current: number): number {
-  const index = SPEEDS.findIndex((speed) => Math.abs(speed - current) < 0.01);
-  return SPEEDS[(index + 1) % SPEEDS.length];
+export function stepSpeed(value: number, direction: -1 | 1): number {
+  return snapSpeed(snapSpeed(value) + direction * 0.05);
 }
 
 export function formatSpeed(speed: number): string {
-  return `${speed}×`;
+  return `${snapSpeed(speed).toFixed(2)}x`;
 }
+
+export const BOOK_SORTS = [
+  { id: "recently_played", label: "Recently played" },
+  { id: "title", label: "Title A–Z" },
+  { id: "author", label: "Author" },
+  { id: "recently_added", label: "Recently added" },
+] as const;
+
+export type BookSortId = (typeof BOOK_SORTS)[number]["id"];
