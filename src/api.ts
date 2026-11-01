@@ -25,6 +25,7 @@ export interface Settings {
   play_pause_buttons: string[];
   hidraw_active?: boolean;
   log_level: string;
+  version: string;
 }
 
 export interface PlexServerChoice {
