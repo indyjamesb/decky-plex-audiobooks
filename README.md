@@ -10,7 +10,7 @@ Features: one Plex server and library, browse and search, playback in the backgr
 
 ### 0.5.3
 
-Not yet tested on a Steam Deck. If a chapter stops early — a dropped stream, or ffplay exiting after the Deck wakes — the plugin stays on that chapter and tries to play it again from the same place. It does not mark the chapter played. Settings has **Check for updates**, which looks at the latest GitHub release when the plugin loads and when you press the button. **Update** hands the zip to Decky. Playback stops during that install. Sign-in and settings stay on the Deck.
+Tested on a Steam Deck. If a chapter stops early — a dropped stream, or ffplay exiting after the Deck wakes — the plugin stays on that chapter and tries to play it again from the same place. It does not mark the chapter played. Settings has **Check for updates**, which looks at the latest GitHub release when the plugin loads and when you press the button. **Update** hands the zip to Decky. Playback stops during that install. Sign-in and settings stay on the Deck.
 
 ### 0.5.2
 
