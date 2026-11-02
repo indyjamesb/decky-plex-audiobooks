@@ -56,6 +56,15 @@ import {
   startProgramming,
 } from "./controllerShortcut";
 import { setClientLogLevel } from "./logClient";
+import {
+  ZIP_FALLBACK,
+  type UpdateOffer,
+  deckyInstallCall,
+  claimLoadCheck,
+  fetchLatestRelease,
+  installUpdate,
+  lookupUpdate,
+} from "./updateCheck";
 import { BOOK_SORTS, BookSortId, formatSpeed, formatTime, snapSpeed, stepSpeed } from "./format";
 
 type View = "player" | "library" | "book" | "settings";
@@ -111,7 +120,57 @@ export function App() {
   const [pageError, setPageError] = useState("");
   const [actionError, setActionError] = useState("");
   const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const [updateOffer, setUpdateOffer] = useState<UpdateOffer | null>(null);
+  const [updateNote, setUpdateNote] = useState("");
+  const [updateBusy, setUpdateBusy] = useState(false);
+  const installedVersion = useRef("");
   const busy = useRef(false);
+
+  async function checkForUpdates(manual: boolean) {
+    setUpdateBusy(true);
+    try {
+      const version = installedVersion.current;
+      const release = await fetchLatestRelease();
+      const result = lookupUpdate(release, version);
+      if (result.kind === "update") {
+        setUpdateOffer(result.offer);
+        setUpdateNote(
+          "Playback stops while the update installs. Your sign-in and settings stay on the Deck.",
+        );
+        return;
+      }
+      setUpdateOffer(null);
+      if (result.kind === "unavailable") {
+        setUpdateNote(manual ? result.reason : "");
+        return;
+      }
+      setUpdateNote(manual ? "You're on the latest release." : "");
+    } catch {
+      setUpdateOffer(null);
+      if (manual) setUpdateNote("Couldn't reach GitHub to check for updates.");
+    } finally {
+      setUpdateBusy(false);
+    }
+  }
+
+  async function onInstallUpdate() {
+    if (!updateOffer) return;
+    if (!deckyInstallCall()) {
+      setUpdateNote(ZIP_FALLBACK);
+      return;
+    }
+    setUpdateBusy(true);
+    try {
+      await installUpdate(updateOffer);
+      setUpdateNote(
+        "Decky is asking to install the update. Playback stops while it installs. Your sign-in and settings stay on the Deck.",
+      );
+    } catch {
+      setUpdateNote(ZIP_FALLBACK);
+    } finally {
+      setUpdateBusy(false);
+    }
+  }
 
   useEffect(() => {
     let stop = false;
@@ -138,6 +197,8 @@ export function App() {
         const settings = await getSettings();
         if (stop) return;
         setSettingsLoaded(true);
+        installedVersion.current = settings.version || "";
+        if (settings.version && claimLoadCheck()) void checkForUpdates(false);
         if (!settings.has_token || !settings.library_key) setView("settings");
       } catch {
         if (!stop) setPageError("The plugin backend is not responding.");
@@ -166,6 +227,14 @@ export function App() {
 
   return (
     <>
+      {updateOffer && view !== "settings" && (
+        <UpdateNotice
+          offer={updateOffer}
+          note={updateNote}
+          busy={updateBusy}
+          onInstall={() => void onInstallUpdate()}
+        />
+      )}
       {view === "player" && (
         <PlayerView
           status={status}
@@ -186,6 +255,11 @@ export function App() {
           ready={settingsLoaded}
           onBack={() => setView(status?.configured ? "player" : "settings")}
           onSaved={() => setView("library")}
+          updateOffer={updateOffer}
+          updateNote={updateNote}
+          updateBusy={updateBusy}
+          onCheckUpdate={() => void checkForUpdates(true)}
+          onInstallUpdate={() => void onInstallUpdate()}
         />
       )}
     </>
@@ -877,14 +951,58 @@ function PlayPauseTrigger() {
   );
 }
 
+function UpdateNotice({
+  offer,
+  note,
+  busy,
+  onInstall,
+}: {
+  offer: UpdateOffer;
+  note: string;
+  busy: boolean;
+  onInstall: () => void;
+}) {
+  const canInstall = deckyInstallCall() !== null;
+  return (
+    <PanelSection title="Update">
+      <PanelSectionRow>
+        <div style={{ whiteSpace: "normal" }}>
+          {`${offer.version} is available. ${note}`}
+        </div>
+      </PanelSectionRow>
+      {canInstall ? (
+        <PanelSectionRow>
+          <ButtonItem layout="below" disabled={busy} onClick={onInstall}>
+            {busy ? "Working…" : "Update"}
+          </ButtonItem>
+        </PanelSectionRow>
+      ) : (
+        <PanelSectionRow>
+          <div style={{ whiteSpace: "normal" }}>{ZIP_FALLBACK}</div>
+        </PanelSectionRow>
+      )}
+    </PanelSection>
+  );
+}
+
 function SettingsView({
   ready,
   onBack,
   onSaved,
+  updateOffer,
+  updateNote,
+  updateBusy,
+  onCheckUpdate,
+  onInstallUpdate,
 }: {
   ready: boolean;
   onBack: () => void;
   onSaved: () => void;
+  updateOffer: UpdateOffer | null;
+  updateNote: string;
+  updateBusy: boolean;
+  onCheckUpdate: () => void;
+  onInstallUpdate: () => void;
 }) {
   const [serverUrl, setServerUrl] = useState("");
   const [serverName, setServerName] = useState("");
@@ -1279,6 +1397,37 @@ function SettingsView({
           </PanelSectionRow>
         </PanelSection>
       )}
+      <PanelSection title="Updates">
+        <PanelSectionRow>
+          <ButtonItem layout="below" disabled={updateBusy} onClick={onCheckUpdate}>
+            {updateBusy ? "Working…" : "Check for updates"}
+          </ButtonItem>
+        </PanelSectionRow>
+        {updateNote && !updateOffer && (
+          <PanelSectionRow>
+            <div style={{ whiteSpace: "normal" }}>{updateNote}</div>
+          </PanelSectionRow>
+        )}
+        {updateOffer && (
+          <PanelSectionRow>
+            <div style={{ whiteSpace: "normal" }}>
+              {`${updateOffer.version} is available. Playback stops while the update installs. Your sign-in and settings stay on the Deck.`}
+            </div>
+          </PanelSectionRow>
+        )}
+        {updateOffer && deckyInstallCall() && (
+          <PanelSectionRow>
+            <ButtonItem layout="below" disabled={updateBusy} onClick={onInstallUpdate}>
+              Update
+            </ButtonItem>
+          </PanelSectionRow>
+        )}
+        {updateOffer && !deckyInstallCall() && (
+          <PanelSectionRow>
+            <div style={{ whiteSpace: "normal" }}>{ZIP_FALLBACK}</div>
+          </PanelSectionRow>
+        )}
+      </PanelSection>
       <PanelSection title="Log">
         <PanelSectionRow>
           <DropdownItem

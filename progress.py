@@ -350,25 +350,37 @@ def atempo_filters(speed: float) -> list[str]:
     return parts
 
 
-def playback_outcome(
-    exit_code: int | None,
-    elapsed_wall_s: float,
-    remaining_ms: int,
-    speed: float,
-) -> str:
-    """Classify an ffplay exit as ``ended`` or ``failed``.
+def position_is_natural_end(position_ms: int, duration_ms: int) -> bool:
+    """True when the estimated position is at the file's known duration.
 
-    A clean exit after most of the remaining audio is the file finishing.
-    An immediate exit on a long file is a failure (bad URL, missing codec,
-    audio device). Returns ``ended`` or ``failed``.
+    ffplay is started with ``-autoexit``, so a dropped HTTP stream or a
+    timeout after sleep also exits 0. That is the end of the chapter only
+    when playback has reached the duration Plex reported. Short files have
+    to reach the duration itself; longer files allow ``_END_SLOP_MS``.
     """
 
-    rate = speed if speed > 0 else 1.0
-    expected = max(0.0, remaining_ms / 1000.0) / rate
-    if elapsed_wall_s < 0.8 and expected > 3:
-        return "failed"
-    if exit_code in (0, None):
+    duration = max(0, int(duration_ms))
+    position = max(0, int(position_ms))
+    if duration <= 0:
+        return False
+    if duration <= _END_SLOP_MS:
+        return position >= duration
+    return position >= duration - _END_SLOP_MS
+
+
+def playback_outcome(
+    exit_code: int | None,
+    position_ms: int,
+    duration_ms: int,
+) -> str:
+    """Classify an ffplay exit as ``ended`` or ``interrupted``.
+
+    ``exit_code`` is recorded by the caller and does not decide the result.
+    A clean exit (0) far from the known duration is ``interrupted``: the
+    chapter must resume, not be scrobbled. Returns ``ended`` or ``interrupted``.
+    """
+
+    del exit_code
+    if position_is_natural_end(position_ms, duration_ms):
         return "ended"
-    if elapsed_wall_s >= max(0.8, expected * 0.85):
-        return "ended"
-    return "failed"
+    return "interrupted"

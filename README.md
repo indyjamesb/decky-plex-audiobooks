@@ -8,6 +8,10 @@ Features: one Plex server and library, browse and search, playback in the backgr
 
 ## Changelog
 
+### 0.5.3
+
+Not yet tested on a Steam Deck. If a chapter stops early — a dropped stream, or ffplay exiting after the Deck wakes — the plugin stays on that chapter and tries to play it again from the same place. It does not mark the chapter played. Settings has **Check for updates**, which looks at the latest GitHub release when the plugin loads and when you press the button. **Update** hands the zip to Decky. Playback stops during that install. Sign-in and settings stay on the Deck.
+
 ### 0.5.2
 
 First public release. Tested on Steam Deck OLED. After a reboot the plugin waits for PipeWire before starting ffplay. If audio is still down, the panel says so instead of blaming the Plex server.
@@ -48,7 +52,7 @@ This plugin is not in the Decky plugin store. It is unofficial and is not affili
 
 You need [Decky Loader](https://decky.xyz/), a Plex server with a Music library of audiobooks, and `ffplay`. SteamOS ships `ffplay` with ffmpeg (`/usr/bin/ffplay`). If a playback error says ffplay is missing, install ffmpeg from Desktop Mode and try again.
 
-Download `plex-audiobooks-v0.5.2.zip` from the [latest release](https://github.com/indyjamesb/decky-plex-audiobooks/releases/latest).
+Download `plex-audiobooks-v0.5.3.zip` from the [latest release](https://github.com/indyjamesb/decky-plex-audiobooks/releases/latest).
 
 1. Open the Quick Access menu (the `...` button) and open Decky. The title bar says **Decky**. Press the gear (its description is **Open Decky Settings**).
 2. Open **General**. Under **Other**, turn on **Developer mode**. A **Developer** page then appears in the settings sidebar.
@@ -69,6 +73,8 @@ Open the Quick Access menu and choose **Plex Audiobooks**.
 
 Install the newer zip the same way. Decky extracts it over `~/homebrew/plugins/plex-audiobooks` and loads the plugin again. Saved settings stay in `~/homebrew/settings/plex-audiobooks/`.
 
+The plugin can check for that zip itself. Open **Plex Audiobooks** settings and press **Check for updates**, or just open the plugin: it asks GitHub once when it loads, and it does not keep asking. If a newer release includes `plex-audiobooks-vX.Y.Z.zip` with a sha256 digest, **Update** gives that file to Decky's own installer. Playback stops while Decky installs it. The Plex sign-in and the other settings live in `~/homebrew/settings/plex-audiobooks/`, not in the plugin folder, so they stay. If that button is not available, use **Install Plugin from ZIP File** above.
+
 ### Uninstall
 
 In Decky settings, open **Plugins**. On the Plex Audiobooks row, open the `...` menu (**Plugin Actions**) and choose **Uninstall**. Confirm **Uninstall Plex Audiobooks**. That removes the plugin folder. The settings file, which holds the Plex token, stays at `~/homebrew/settings/plex-audiobooks/settings.json`. Delete that file if you want the token gone.
@@ -79,7 +85,7 @@ Over SSH, you can unpack the zip yourself:
 
 ```bash
 sudo mkdir -p ~/homebrew/plugins
-sudo unzip -o /path/to/plex-audiobooks-v0.5.2.zip -d ~/homebrew/plugins
+sudo unzip -o /path/to/plex-audiobooks-v0.5.3.zip -d ~/homebrew/plugins
 sudo systemctl restart plugin_loader
 ```
 
@@ -95,7 +101,7 @@ pnpm test
 pnpm run package
 ```
 
-`pnpm test` runs the Python unit tests. `pnpm run package` writes `release/plex-audiobooks-v0.5.2.zip`.
+`pnpm test` runs the Python unit tests. `pnpm run package` writes `release/plex-audiobooks-v0.5.3.zip`.
 
 `pnpm run build` only produces `dist/index.js`. A manual install without the zip is the plugin directory containing `dist/`, `main.py`, `deck_hid.py`, `game_audio.py`, `player.py`, `plex.py`, `plex_auth.py`, `progress.py`, `plugin.json`, `package.json`, `LICENSE`, `NOTICE`, and `README.md`.
 
@@ -162,7 +168,7 @@ Choosing a chapter, pressing Next or Previous, or skipping backward also rewrite
 Each time the plugin loads, Decky starts a new file named with the time, `~/homebrew/logs/plex-audiobooks/YYYY-MM-DD HH.MM.SS.log`. It keeps the 5 newest `.log` files and deletes the older ones. A single file is not size-capped, so leave Debug on only while you are testing. Lines from the panel are prefixed `frontend:`.
 
 - **Error** records real failures: ffplay missing or crashing, audio not ready, Plex unreachable, a book failing to load or list, sign-in failing, and settings failing to read or save.
-- **Warning** also records problems that do not stop playback: a progress report or scrobble that failed, a game-volume change or restore that failed, and `pactl` failures.
+- **Warning** also records problems that do not stop playback: a progress report or scrobble that failed, a game-volume change or restore that failed, `pactl` failures, and a chapter that stopped before it ended (the log includes the position, the duration, and the ffplay exit code).
 - **Info** also records ordinary activity: load and unload, what is playing, shortcut presses, server switches, sign-in and sign-out, and setting changes.
 - **Debug** also records connection attempts, local checks, and controller diagnostics.
 
@@ -179,7 +185,7 @@ On a Steam Deck OLED (SteamOS 3.9.5) with a real Plex Media Server:
 - The play/pause shortcut in a game with the Deck L4/R4, the Steam Controller back buttons, an Xbox Wireless Controller and DualSense over Bluetooth, and a Switch Pro Controller over USB.
 - Playback right after a reboot, before the Deck's audio has finished starting.
 
-The 97 unit tests cover the progress math, the Plex and plex.tv clients against local stand-in servers (tokens stay in headers and out of URLs and errors), the controller report parsing, game-volume handling, and ffplay start, pause, and seek.
+The unit tests cover the progress math, including a chapter that exits at its real end versus one that exits early, the Plex and plex.tv clients against local stand-in servers (tokens stay in headers and out of URLs and errors), the controller report parsing, game-volume handling, ffplay start, pause, and seek, and the GitHub release check.
 
 ## Not tested
 
@@ -189,10 +195,12 @@ The 97 unit tests cover the progress math, the Plex and plex.tv clients against 
 - HTTPS servers with a private certificate. The plugin verifies HTTPS certificates, so a self-signed one is expected to fail.
 - Embedded chapters inside one `.m4b`. Next and previous follow Plex tracks, so a book Plex shows as one file is one chapter.
 - Volume changes while playing when `pactl` is missing.
+- A dropped stream or waking the Deck in the middle of a chapter. The plugin should reconnect to the same chapter and should not mark it played. That path is covered by unit tests and has not been tried on a Deck.
+- **Check for updates** and Decky's install prompt. Not tried on a Deck.
 
 ## Known limits
 
-- Sleep stops playback. Nothing in the plugin keeps the Deck awake.
+- While the Deck is asleep, playback stops. Nothing in the plugin keeps the Deck awake. After it wakes, a chapter that was cut off should continue from the same place instead of skipping ahead. That wake path has not been confirmed on a device.
 - Files are direct-played. The plugin never asks Plex to transcode, so a codec ffplay can't read won't play.
 - The position bar is estimated from elapsed time and speed. If the stream buffers, the bar can run slightly ahead of the audio. Seeking restarts ffplay, so there's a short gap.
 

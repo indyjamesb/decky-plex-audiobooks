@@ -61,8 +61,17 @@ from progress import (
     track_is_complete,
 )
 
-VERSION = "0.5.2"
+VERSION = "0.5.3"
 REPORT_INTERVAL_S = 10
+# A dropped stream can die, reconnect, and die again. Three reconnects, then pause.
+PREMATURE_RETRY_LIMIT = 3
+# A reconnect that is still playing after this long gets a fresh retry budget.
+STABLE_PLAY_S = 20.0
+RETRY_MESSAGE = "Connection dropped. Reconnecting to this chapter."
+PAUSE_MESSAGE = (
+    "The chapter stopped before it ended, and reconnecting didn't work. "
+    "Playback is paused. Press play to try again."
+)
 _PY_LOG_LEVELS = {
     "error": logging.ERROR,
     "warning": logging.WARNING,
@@ -140,6 +149,11 @@ class Plugin:
         self._play_queue_item_id = ""
         self._game = None
         self._game_restored = False
+        self._drop_retries = 0
+        self._resume_at = 0.0
+        self._resume_index = 0
+        self._resume_offset = 0
+        self._premature_backoff_s = (1.0, 2.0, 4.0)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -514,6 +528,7 @@ class Plugin:
             "play_pause_buttons": list(self.settings.get("play_pause_buttons") or []),
             "hidraw_active": bool(self._hid.active) if self._hid is not None else False,
             "log_level": normalize_log_level(self.settings.get("log_level")),
+            "version": VERSION,
         }
 
     def _apply_log_level(self) -> None:
@@ -1151,9 +1166,12 @@ class Plugin:
         self._kick_game_audio()
         return {"success": True}
 
-    async def _start_track_locked(self, index: int, offset_ms: int) -> dict:
+    async def _start_track_locked(self, index: int, offset_ms: int, *, user_initiated: bool = True) -> dict:
         if self.player is None or not self.tracks:
             return {"success": False, "message": "Nothing is loaded."}
+        if user_initiated:
+            self._drop_retries = 0
+            self._resume_at = 0.0
         index = max(0, min(int(index), len(self.tracks) - 1))
         offset_ms = max(0, int(offset_ms))
         track = self.tracks[index]
@@ -1303,24 +1321,79 @@ class Plugin:
 
     async def _tick(self) -> None:
         async with self._lock:
+            if await self._resume_if_due_locked():
+                return
             if self.player is None or not self.tracks or not self.player.active:
                 return
             exit_code = self.player.poll()
             if exit_code is not None:
-                elapsed = time.monotonic() - self._started_wall
-                remaining = max(0, self.tracks[self.index].duration_ms - self.player.base_ms)
-                outcome = playback_outcome(exit_code, elapsed, remaining, self.player.speed)
-                if outcome == "ended":
+                position = self.player.position_ms()
+                duration = self.tracks[self.index].duration_ms
+                if playback_outcome(exit_code, position, duration) == "ended":
+                    self._drop_retries = 0
+                    self._resume_at = 0.0
                     await self._on_track_ended_locked()
                 else:
-                    await self._on_track_failed_locked()
+                    await self._on_premature_exit_locked(exit_code, position)
                 return
+            if time.monotonic() - self._started_wall >= STABLE_PLAY_S:
+                self._drop_retries = 0
             if (
                 self.player.process_alive()
                 and not self.player.paused
                 and time.monotonic() - self._last_report >= REPORT_INTERVAL_S
             ):
                 await self._report_current("playing")
+
+    async def _resume_if_due_locked(self) -> bool:
+        if self._resume_at <= 0 or time.monotonic() < self._resume_at:
+            return False
+        if self.player is None or not self.tracks:
+            self._resume_at = 0.0
+            return False
+        self._resume_at = 0.0
+        index = self._resume_index
+        offset = self._resume_offset
+        result = await self._start_track_locked(index, offset, user_initiated=False)
+        if result.get("success"):
+            return True
+        await self._on_premature_exit_locked(None, offset)
+        return True
+
+    async def _on_premature_exit_locked(self, exit_code: int | None, position: int) -> None:
+        """A stream drop or a wake, not the end of the chapter.
+
+        Does not scrobble and does not clear the saved offset. Reconnects to
+        the same file until ``PREMATURE_RETRY_LIMIT`` is spent, then pauses.
+        """
+
+        if self.player is None or not self.tracks:
+            return
+        track = self.tracks[self.index]
+        duration = track.duration_ms
+        spot = max(0, int(position))
+        decky.logger.warning(
+            "Playback stopped early at %d ms of %d ms (ffplay exit %s)",
+            spot,
+            int(duration),
+            exit_code,
+        )
+        if self.player.active:
+            self.player.mark_inactive()
+        self.rest_offset_ms = spot
+        self._drop_retries += 1
+        await self._report_locked(track, "stopped", spot, finishing=False)
+        if self._drop_retries > PREMATURE_RETRY_LIMIT:
+            self._drop_retries = 0
+            self._resume_at = 0.0
+            self.last_error = PAUSE_MESSAGE
+            self._kick_game_audio()
+            return
+        step = min(self._drop_retries - 1, len(self._premature_backoff_s) - 1)
+        self._resume_at = time.monotonic() + self._premature_backoff_s[step]
+        self._resume_index = self.index
+        self._resume_offset = spot
+        self.last_error = RETRY_MESSAGE
 
     async def _on_track_ended_locked(self) -> None:
         if self.player is None or not self.tracks:

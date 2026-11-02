@@ -199,14 +199,19 @@ class ReportMathTests(unittest.TestCase):
             ["Middle", "New", "Zebra", "Alpha"],
         )
 
-    def test_immediate_exit_on_a_long_file_is_failure(self):
-        self.assertEqual(playback_outcome(0, elapsed_wall_s=0.2, remaining_ms=3_600_000, speed=1), "failed")
+    def test_clean_exit_near_the_known_end_is_the_end(self):
+        self.assertEqual(playback_outcome(0, 3_600_000 - 1000, 3_600_000), "ended")
+        self.assertEqual(playback_outcome(1, 3_600_000, 3_600_000), "ended")
 
-    def test_clean_exit_after_the_file_is_the_end(self):
-        self.assertEqual(playback_outcome(0, elapsed_wall_s=30, remaining_ms=30_000, speed=1), "ended")
+    def test_clean_exit_early_is_interrupted(self):
+        # About 2.5 minutes into an hour, which is where a dropped stream skipped ahead.
+        self.assertEqual(playback_outcome(0, 150_000, 3_600_000), "interrupted")
+        self.assertEqual(playback_outcome(None, 150_000, 3_600_000), "interrupted")
 
-    def test_nonzero_exit_early_is_failure(self):
-        self.assertEqual(playback_outcome(1, elapsed_wall_s=1.2, remaining_ms=600_000, speed=1), "failed")
+    def test_unknown_or_short_duration_must_reach_the_end(self):
+        self.assertEqual(playback_outcome(0, 0, 0), "interrupted")
+        self.assertEqual(playback_outcome(0, 1000, 2000), "interrupted")
+        self.assertEqual(playback_outcome(0, 2000, 2000), "ended")
 
 
 if __name__ == "__main__":
