@@ -72,6 +72,7 @@ PAUSE_MESSAGE = (
     "The chapter stopped before it ended, and reconnecting didn't work. "
     "Playback is paused. Press play to try again."
 )
+SAVE_FAILED = "Couldn't save your place to Plex. The book is still loaded."
 _PY_LOG_LEVELS = {
     "error": logging.ERROR,
     "warning": logging.WARNING,
@@ -109,6 +110,15 @@ def _to_thread(func, *args):
     return loop.run_in_executor(None, func, *args)
 
 
+def _retrieve_task_result(task: asyncio.Task) -> None:
+    """Mark a finished task's exception as retrieved."""
+
+    try:
+        task.exception()
+    except (asyncio.CancelledError, asyncio.InvalidStateError):
+        return
+
+
 class Plugin:
     """Quick Access panel and background Plex audiobook player.
 
@@ -133,6 +143,7 @@ class Plugin:
         self._tick_task: asyncio.Task | None = None
         self._last_report = 0.0
         self._align_gen = 0
+        self._align_task: asyncio.Task | None = None
         self._started_wall = 0.0
         self._cover_cache: dict[str, str] = {}
         self._pending_pin: dict | None = None
@@ -1064,8 +1075,35 @@ class Plugin:
             return await self._start_track_locked(index, offset)
 
     async def stop_playback(self):
+        """Save the position to Plex, then unload the book.
+
+        Audio stops either way, so a reconnect or the 10-second reporter cannot
+        send another position for this session. The book stays loaded when the
+        save fails: the position remains on screen and Play can start it again.
+        After a successful save the next play loads the book from Plex.
+        """
+
         async with self._lock:
-            return await self._stop_locked()
+            if not self.tracks:
+                return {"success": True}
+            position = self._current_offset()
+            index = self.index if 0 <= self.index < len(self.tracks) else 0
+            track = self.tracks[index]
+            title = (self.book or {}).get("title") or "audiobook"
+            self.rest_offset_ms = position
+            if self.player is not None:
+                self.player.stop()
+            # Align work does not take the playback lock. Cancel it before the
+            # save so a chapter scrobble cannot land after this stop.
+            self._silence_book_reporters()
+            self._kick_game_audio()
+            saved = await self._report_locked(track, "stopped", position, finishing=False)
+            if not saved:
+                self.last_error = SAVE_FAILED
+                return {"success": False, "message": SAVE_FAILED}
+            self._clear_loaded_book()
+            decky.logger.info("Saved the listening position and unloaded %s", title)
+            return {"success": True}
 
     async def skip(self, delta_ms: int):
         async with self._lock:
@@ -1156,6 +1194,13 @@ class Plugin:
         return self.rest_offset_ms
 
     async def _stop_locked(self) -> dict:
+        """Stop audio and report the position. The book stays loaded.
+
+        Sign-out and a server change call this, then clear the book themselves.
+        The Stop button uses ``stop_playback``, which unloads only after Plex
+        accepts the position.
+        """
+
         if not self.tracks or self.player is None:
             return {"success": True}
         position = self._current_offset()
@@ -1165,6 +1210,41 @@ class Plugin:
         await self._report_locked(track, "stopped", position, finishing=False)
         self._kick_game_audio()
         return {"success": True}
+
+    def _silence_book_reporters(self) -> None:
+        """Cancel chapter-align work and any reconnect for the loaded book."""
+
+        self._align_gen += 1
+        self._cancel_align_task()
+        self._resume_at = 0.0
+        self._drop_retries = 0
+        self._resume_index = 0
+        self._resume_offset = 0
+
+    def _clear_loaded_book(self) -> None:
+        """Forget the book so a later play, resume, or tick cannot report it."""
+
+        self.book = None
+        self.tracks = []
+        self.index = 0
+        self.rest_offset_ms = 0
+        self.cover = ""
+        self._play_queue_item_id = ""
+        self._started_wall = 0.0
+        self.last_error = None
+        self._silence_book_reporters()
+
+    def _cancel_align_task(self) -> None:
+        task = self._align_task
+        self._align_task = None
+        if task is None:
+            return
+        if not task.done():
+            task.cancel()
+        task.add_done_callback(_retrieve_task_result)
+
+    def _align_current(self, generation: int) -> bool:
+        return generation == self._align_gen and self._running
 
     async def _start_track_locked(self, index: int, offset_ms: int, *, user_initiated: bool = True) -> dict:
         if self.player is None or not self.tracks:
@@ -1248,7 +1328,7 @@ class Plugin:
             return
         await self._report_locked(self.tracks[self.index], state, self._current_offset(), finishing=False)
 
-    async def _report_locked(self, track: AudioTrack, state: str, position_ms: int, *, finishing: bool) -> None:
+    async def _report_locked(self, track: AudioTrack, state: str, position_ms: int, *, finishing: bool) -> bool:
         position = reported_position_ms(position_ms, state)
         try:
             await self._plex(
@@ -1264,8 +1344,10 @@ class Plugin:
             self._last_report = time.monotonic()
             if state in ("playing", "paused", "stopped"):
                 track.view_offset_ms = 0 if finishing else position
+            return True
         except Exception:
             decky.logger.warning("Progress report failed (%s)", state)
+            return False
 
     async def _scrobble_locked(self, track: AudioTrack, played: bool) -> None:
         try:
@@ -1283,19 +1365,24 @@ class Plugin:
         self._align_gen += 1
         generation = self._align_gen
         snapshot = list(self.tracks)
-        asyncio.create_task(self._align_around(generation, snapshot, index))
+        self._cancel_align_task()
+        self._align_task = asyncio.create_task(self._align_around(generation, snapshot, index))
 
     async def _align_around(self, generation: int, tracks: list[AudioTrack], index: int) -> None:
         for position, track in enumerate(tracks):
-            if generation != self._align_gen or not self._running:
+            if not self._align_current(generation):
                 return
             try:
                 if position < index and not track_is_complete(track):
                     await self._plex(lambda client, key=track.rating_key: client.scrobble(key, True))
+                    if not self._align_current(generation):
+                        return
                     track.view_count = max(1, track.view_count)
                     track.view_offset_ms = 0
                 elif position > index and (track.view_offset_ms > 0 or track.view_count > 0):
                     await self._plex(lambda client, key=track.rating_key: client.clear_progress(key))
+                    if not self._align_current(generation):
+                        return
                     track.view_offset_ms = 0
                     track.view_count = 0
             except Exception:
