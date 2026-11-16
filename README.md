@@ -8,6 +8,11 @@ Features: one Plex server and library, browse and search, playback in the backgr
 
 ## Changelog
 
+### 0.5.4
+
+- **Speed controls fit the Quick Access menu.** The −0.05 and +0.05 buttons were wider than the panel, so +0.05 was cut off at the right edge. They now share one row with the speed readout, and the chapter buttons (Prev, -30s, Play, +30s, Next) use the same compact size so their labels stay on screen. Speed still moves in steps of 0.05 from 0.50x to 3.00x.
+- **Stop and save progress unloads the book.** After Plex accepts the listening position, playback is released and the panel returns to "Nothing is loaded." The next Resume reads the position from Plex. If the save fails, the book stays loaded so you can try again.
+
 ### 0.5.3
 
 Tested on a Steam Deck.
@@ -55,7 +60,7 @@ This plugin is not in the Decky plugin store. It is unofficial and is not affili
 
 You need [Decky Loader](https://decky.xyz/), a Plex server with a Music library of audiobooks, and `ffplay`. SteamOS ships `ffplay` with ffmpeg (`/usr/bin/ffplay`). If a playback error says ffplay is missing, install ffmpeg from Desktop Mode and try again.
 
-Download `plex-audiobooks-v0.5.3.zip` from the [latest release](https://github.com/indyjamesb/decky-plex-audiobooks/releases/latest).
+Download `plex-audiobooks-v0.5.4.zip` from the [latest release](https://github.com/indyjamesb/decky-plex-audiobooks/releases/latest).
 
 1. Open the Quick Access menu (the `...` button) and open Decky. The title bar says **Decky**. Press the gear (its description is **Open Decky Settings**).
 2. Open **General**. Under **Other**, turn on **Developer mode**. A **Developer** page then appears in the settings sidebar.
@@ -88,7 +93,7 @@ Over SSH, you can unpack the zip yourself:
 
 ```bash
 sudo mkdir -p ~/homebrew/plugins
-sudo unzip -o /path/to/plex-audiobooks-v0.5.3.zip -d ~/homebrew/plugins
+sudo unzip -o /path/to/plex-audiobooks-v0.5.4.zip -d ~/homebrew/plugins
 sudo systemctl restart plugin_loader
 ```
 
@@ -104,7 +109,7 @@ pnpm test
 pnpm run package
 ```
 
-`pnpm test` runs the Python unit tests. `pnpm run package` writes `release/plex-audiobooks-v0.5.3.zip`.
+`pnpm test` runs the Python unit tests. `pnpm run package` writes `release/plex-audiobooks-v0.5.4.zip`.
 
 `pnpm run build` only produces `dist/index.js`. A manual install without the zip is the plugin directory containing `dist/`, `main.py`, `deck_hid.py`, `game_audio.py`, `player.py`, `plex.py`, `plex_auth.py`, `progress.py`, `plugin.json`, `package.json`, `LICENSE`, `NOTICE`, and `README.md`.
 
