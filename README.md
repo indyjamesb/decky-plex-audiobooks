@@ -140,12 +140,14 @@ With that setting on, a position from another Plex app showed up in Plex as the 
 
 With **Store track progress** on, this plugin writes your place in each chapter file to Plex. Plex and Plexamp do not remember which file of a multi-file book you were on. Some other audiobook apps do not read progress back from Plex at all. A spot saved on the Deck may not show up there, and you may need to set it in that app yourself.
 
+**Stop and save progress** unloads the book after Plex accepts the position. This Deck then has nothing loaded to report, so listening you do afterward in another app (for example Prologue) is not overwritten by an older Deck position. If that save does not reach Plex, the book stays loaded and the panel shows the error.
+
 ## How to listen
 
 - **Library** lists books (Plex albums) with the author. The default order is recently played (`lastViewedAt`, then `addedAt`, then title). You can also sort by title, author, or recently added. The choice is saved. Search matches album titles. Open a book to see the cover, author, and files.
 - **Play / Resume** reads Plex's saved progress and starts there. A finished book starts over.
 - Playback is an `ffplay` process started by the Python backend. Closing the Quick Access Menu does not stop it, and a focused game does not stop it, as long as the Deck stays awake.
-- **Pause**, **stop**, **-30s**, **+30s**, **previous**, and **next** are in the panel. Previous restarts the current file once you are a few seconds in; from the start of a file it goes back one file. Next marks the current file played in Plex and starts the next one.
+- **Pause**, **Stop and save progress**, **-30s**, **+30s**, **previous**, and **next** are in the panel. **Stop and save progress** stops playback and writes the current position to Plex. When that save succeeds, the book is unloaded: the panel clears and this Deck sends no further progress for it. The next **Resume** loads the book from Plex, so a position saved here is not written back over listening you did in another app. If the save fails, the book stays loaded (playback stays stopped) and the panel shows the error, so the position is not dropped. Previous restarts the current file once you are a few seconds in; from the start of a file it goes back one file. Next marks the current file played in Plex and starts the next one.
 - **Speed** moves in steps of 0.05 from 0.50x to 3.00x, so 1.20x is a real step. The last speed is saved. Changing it restarts the file at the current position.
 - **Book volume** is the audiobook only. On SteamOS it is applied with `pactl` when that exists. Otherwise it is applied the next time a file starts.
 - **Game volume** sets every other app's audio, such as the game, without touching the book. 100 is full volume.
@@ -161,6 +163,8 @@ With **Store track progress** on, this plugin writes your place in each chapter 
 Plex stores `viewOffset` per file, in milliseconds. For a multi-file book the plugin treats that the way Music Assistant's Plex audiobook support does: the resume point is the furthest file that still has an offset, and files before it count at their full length. A run of files that Plex has marked played, with the offset cleared, is skipped so the next file starts at the beginning. One `.m4b` is just one file, so `viewOffset` is the place inside that file.
 
 While a file is playing, the plugin tells Plex with `GET /:/timeline` about every 10 seconds, and again on pause, stop, and seek. `time` and `playbackTime` are the position in milliseconds. The timeline duration is reported longer than the real file until the file actually finishes, because Plex otherwise marks an item watched at about 90% and drops the resume point. When a file finishes, or you press Next, the plugin scrobbles that file (`/:/scrobble`) so the position is saved for any Plex client.
+
+**Stop and save progress** sends one stopped timeline update for the current file. After Plex accepts it, the plugin drops the loaded book and cancels the 10-second reporter, chapter-align work, and any reconnect timer. Nothing after that sends another update for that session. **Resume** reads `viewOffset` from Plex again.
 
 Choosing a chapter, pressing Next or Previous, or skipping backward also rewrites nearby Plex progress: earlier unfinished files are marked played, and later saved offsets are cleared, so the file you are on is the resume point. That can mark files played that you did not listen through. Pause and the 10-second updates only move the current file's offset.
 
@@ -188,7 +192,7 @@ On a Steam Deck OLED (SteamOS 3.9.5) with a real Plex Media Server:
 - The play/pause shortcut in a game with the Deck L4/R4, the Steam Controller back buttons, an Xbox Wireless Controller and DualSense over Bluetooth, and a Switch Pro Controller over USB.
 - Playback right after a reboot, before the Deck's audio has finished starting.
 
-The unit tests cover the progress math, including a chapter that exits at its real end versus one that exits early, the Plex and plex.tv clients against local stand-in servers (tokens stay in headers and out of URLs and errors), the controller report parsing, game-volume handling, ffplay start, pause, and seek, and the GitHub release check.
+The unit tests cover the progress math, including a chapter that exits at its real end versus one that exits early, stopping and unloading a book only after Plex accepts the position, the Plex and plex.tv clients against local stand-in servers (tokens stay in headers and out of URLs and errors), the controller report parsing, game-volume handling, ffplay start, pause, and seek, and the GitHub release check.
 
 ## Not tested
 
