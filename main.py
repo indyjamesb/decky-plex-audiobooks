@@ -61,7 +61,7 @@ from progress import (
     track_is_complete,
 )
 
-VERSION = "0.5.3"
+VERSION = "0.5.4"
 REPORT_INTERVAL_S = 10
 # A dropped stream can die, reconnect, and die again. Three reconnects, then pause.
 PREMATURE_RETRY_LIMIT = 3

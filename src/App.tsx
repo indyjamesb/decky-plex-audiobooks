@@ -9,7 +9,7 @@ import {
   TextField,
   ToggleField,
 } from "@decky/ui";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 
 import {
   BookDetail,
@@ -68,6 +68,32 @@ import {
 import { BOOK_SORTS, BookSortId, formatSpeed, formatTime, snapSpeed, stepSpeed } from "./format";
 
 type View = "player" | "library" | "book" | "settings";
+
+/**
+ * Steam's DialogButton is about 160px wide with 24px of side padding, so a row of
+ * them runs past the Quick Access panel (about 300px). These overrides let the
+ * buttons share that width and keep their labels inside the tap target.
+ */
+const qamButtonStyle: CSSProperties = {
+  flex: "1 1 0",
+  width: "auto",
+  minWidth: 0,
+  maxWidth: "100%",
+  boxSizing: "border-box",
+  margin: 0,
+  padding: "11px 4px",
+  fontSize: "14px",
+  lineHeight: "20px",
+  whiteSpace: "nowrap",
+};
+
+const qamRowStyle: CSSProperties = {
+  display: "flex",
+  gap: "6px",
+  width: "100%",
+  minWidth: 0,
+  alignItems: "center",
+};
 
 function percent(position: number, duration: number): number {
   if (!duration || duration <= 0) return 0;
@@ -357,10 +383,10 @@ function PlayerView({
           </>
         )}
         <PanelSectionRow>
-          <Focusable style={{ display: "flex", gap: "4px", width: "100%" }}>
+          <Focusable style={qamRowStyle}>
             <DialogButton
               focusable={true}
-              style={{ flex: 1, minWidth: 0 }}
+              style={qamButtonStyle}
               onClick={() => void onRun(() => previousChapter())}
               disabled={!book}
             >
@@ -368,7 +394,7 @@ function PlayerView({
             </DialogButton>
             <DialogButton
               focusable={true}
-              style={{ flex: 1, minWidth: 0 }}
+              style={qamButtonStyle}
               onClick={() => void onRun(() => skip(-30000))}
               disabled={!book}
             >
@@ -376,7 +402,7 @@ function PlayerView({
             </DialogButton>
             <DialogButton
               focusable={true}
-              style={{ flex: 1, minWidth: 0 }}
+              style={qamButtonStyle}
               onClick={() => void onRun(() => togglePlayback())}
               disabled={!book}
             >
@@ -384,7 +410,7 @@ function PlayerView({
             </DialogButton>
             <DialogButton
               focusable={true}
-              style={{ flex: 1, minWidth: 0 }}
+              style={qamButtonStyle}
               onClick={() => void onRun(() => skip(30000))}
               disabled={!book}
             >
@@ -392,7 +418,7 @@ function PlayerView({
             </DialogButton>
             <DialogButton
               focusable={true}
-              style={{ flex: 1, minWidth: 0 }}
+              style={qamButtonStyle}
               onClick={() => void onRun(() => nextChapter())}
               disabled={!book}
             >
@@ -401,9 +427,9 @@ function PlayerView({
           </Focusable>
         </PanelSectionRow>
         <PanelSectionRow>
-          <Focusable style={{ display: "flex", gap: "4px", width: "100%", alignItems: "center" }}>
+          <Focusable style={qamRowStyle}>
             <DialogButton
-              style={{ flex: 1 }}
+              style={qamButtonStyle}
               onClick={() => {
                 const next = stepSpeed(shownSpeed, -1);
                 setLocalSpeed(next);
@@ -412,9 +438,11 @@ function PlayerView({
             >
               −0.05
             </DialogButton>
-            <div style={{ flex: 1, textAlign: "center", fontWeight: 700 }}>{formatSpeed(shownSpeed)}</div>
+            <div style={{ flex: "0 0 auto", minWidth: "4.6em", textAlign: "center", fontWeight: 700 }}>
+              {formatSpeed(shownSpeed)}
+            </div>
             <DialogButton
-              style={{ flex: 1 }}
+              style={qamButtonStyle}
               onClick={() => {
                 const next = stepSpeed(shownSpeed, 1);
                 setLocalSpeed(next);
